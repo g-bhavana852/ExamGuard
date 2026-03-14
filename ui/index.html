@@ -3,30 +3,145 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ExamProctor — Online Exam Proctoring System</title>
+  <title>ExamGuard — Online Proctoring System</title>
+  <!-- Favicon: "EG" text as SVG data URI -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%236c63ff'/><text x='50' y='68' text-anchor='middle' font-size='52' font-weight='bold' font-family='sans-serif' fill='white'>EG</text></svg>" />
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
 
+<!-- ═══════════════════ AUTH OVERLAY ═══════════════════ -->
+<div id="login-overlay" class="login-overlay active">
+  <div class="login-box">
+
+    <div class="login-logo">
+      <div class="login-logo-icon">EG</div>
+      <div>
+        <div class="login-title">ExamGuard</div>
+        <div class="login-sub">Online Exam Proctoring System</div>
+      </div>
+    </div>
+
+    <!-- Auth tabs -->
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab active" id="tab-login"  onclick="switchAuthTab('login')">Sign In</button>
+      <button type="button" class="auth-tab"        id="tab-signup" onclick="switchAuthTab('signup')">Sign Up</button>
+    </div>
+
+    <!-- ── Login form ── -->
+    <form id="login-form" onsubmit="doLogin(event)">
+      <div class="form-group">
+        <label>Username or Email</label>
+        <input type="text" name="identifier" required placeholder="Enter your username or email"
+               autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" name="password" required placeholder="Enter your password"
+               autocomplete="current-password" />
+      </div>
+      <div id="login-error" class="login-error"></div>
+      <button type="submit" class="btn btn-primary btn-full"
+              id="login-btn">Sign In</button>
+    </form>
+
+    <!-- ── Signup form ── -->
+    <form id="signup-form" class="hidden" onsubmit="doSignup(event)">
+      <div class="form-group">
+        <label>Full Name</label>
+        <input type="text" name="full_name" required placeholder="Your full name" />
+      </div>
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" name="username" required placeholder="Choose a username (3–30 chars)" />
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" name="password" required placeholder="Min 6 characters" />
+      </div>
+      <div class="form-group">
+        <label>Role</label>
+        <div class="role-grid">
+          <label class="role-option">
+            <input type="radio" name="role" value="student" checked
+                   onchange="onRoleChange(this)" /> Student
+          </label>
+          <label class="role-option">
+            <input type="radio" name="role" value="instructor"
+                   onchange="onRoleChange(this)" /> Teacher
+          </label>
+          <label class="role-option">
+            <input type="radio" name="role" value="proctor"
+                   onchange="onRoleChange(this)" /> Proctor
+          </label>
+        </div>
+        <!-- Shown only when Teacher is selected -->
+        <label class="role-also hidden" id="also-proctor-wrap">
+          <input type="checkbox" name="also_proctor" id="also-proctor" />
+          Also act as Proctor
+        </label>
+      </div>
+      <div id="signup-error" class="login-error"></div>
+      <button type="submit" class="btn btn-primary btn-full"
+              id="signup-btn">Create Account</button>
+    </form>
+
+  </div>
+</div>
+
+<!-- ═══════════════════ EXAM TAKING OVERLAY ═══════════════════ -->
+<div id="exam-overlay" class="exam-overlay">
+  <div class="exam-header">
+    <div class="exam-header-left">
+      <div class="exam-header-title" id="exam-overlay-title">Exam</div>
+      <div id="exam-answered-badge" class="topbar-status">0 answered</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:20px">
+      <div id="exam-timer" class="exam-timer">60:00</div>
+      <button type="button" class="btn btn-danger" id="exam-submit-btn"
+              onclick="submitExam()">Submit Exam</button>
+    </div>
+  </div>
+  <div class="exam-progress-bar">
+    <div class="exam-progress-fill" id="exam-progress-fill"></div>
+  </div>
+  <!-- Proctor warning banner — shown when proctor sends a warning -->
+  <div id="exam-warning-banner" class="exam-warning-banner">
+    <span class="exam-warning-icon">!</span>
+    <div class="exam-warning-body">
+      <div class="exam-warning-title">Warning from Proctor</div>
+      <div id="exam-warning-text" class="exam-warning-text"></div>
+    </div>
+    <button type="button" class="exam-warning-dismiss"
+      onclick="document.getElementById('exam-warning-banner').classList.remove('visible')">Dismiss</button>
+  </div>
+  <div class="exam-body" id="exam-body"><!-- questions injected by JS --></div>
+</div>
+
+<!-- ═══════════════════ RESULT OVERLAY ═══════════════════ -->
+<div id="result-overlay" class="result-overlay">
+  <div class="result-box" id="result-box"><!-- injected by JS --></div>
+</div>
+
 <!-- ═══════════════════ SIDEBAR ═══════════════════ -->
 <aside class="sidebar">
-  <div class="logo" onclick="showPage('dashboard')" title="Go to Dashboard">
-    <div class="logo-icon">🛡️</div>
+  <div class="logo" onclick="showPage(defaultPage())" title="Go to home">
+    <div class="logo-icon">EG</div>
     <div>
-      <h1>ExamProctor</h1>
+      <h1>ExamGuard</h1>
       <span>v1.0 · DBMS Project</span>
     </div>
   </div>
 
-  <!-- Populated by renderNav() in app.js -->
+  <!-- Populated by renderNav() after login -->
   <nav class="nav"></nav>
 
   <div class="sidebar-footer">
     <div class="user-card">
-      <div class="avatar">PA</div>
+      <div class="avatar">EG</div>
       <div class="user-info">
-        <div class="name">Proctor Admin</div>
-        <div class="role">Administrator</div>
+        <div class="name">ExamGuard</div>
+        <div class="role">Please sign in</div>
       </div>
     </div>
   </div>
@@ -38,16 +153,17 @@
   <!-- ─── TOPBAR ─── -->
   <div class="topbar">
     <h2 id="page-title">Dashboard</h2>
-    <div class="topbar-actions">
-      <span class="topbar-status">🟢 DB Connected · ExamProctor</span>
-      <button type="button" class="btn btn-outline" onclick="window.location='/api/export'">Export Report</button>
-      <button type="button" class="btn btn-primary" onclick="showCreateExamModal()">+ New Exam</button>
+    <div class="topbar-actions" id="topbar-actions">
+      <button type="button" id="topbar-refresh-btn" class="btn btn-outline btn-refresh"
+        onclick="refreshPage()" title="Refresh page data">Refresh</button>
+      <span class="topbar-status" id="topbar-status">● ExamGuard</span>
     </div>
   </div>
 
   <!-- Page containers — content injected by app.js -->
   <div class="page" id="page-dashboard"></div>
   <div class="page" id="page-monitor"></div>
+  <div class="page" id="page-courses"></div>
   <div class="page" id="page-exams"></div>
   <div class="page" id="page-questions"></div>
   <div class="page" id="page-student-view"></div>

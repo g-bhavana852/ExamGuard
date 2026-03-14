@@ -51,8 +51,11 @@ CREATE TABLE Users (
     is_active     BOOLEAN        NOT NULL DEFAULT TRUE,
     last_login    DATETIME,
 
+    username      VARCHAR(50)    NULL,                       -- chosen at signup, unique
+
     PRIMARY KEY (user_id),
-    UNIQUE  KEY uq_users_email  (email),
+    UNIQUE  KEY uq_users_email    (email),
+    UNIQUE  KEY uq_users_username (username),
 
     CONSTRAINT chk_users_email
         CHECK (email REGEXP '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'),
@@ -384,6 +387,26 @@ CREATE TABLE LoginSessions (
     UNIQUE  KEY uq_session_token (session_token),
 
     CONSTRAINT fk_session_user
+        FOREIGN KEY (user_id) REFERENCES Users(user_id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+
+-- ============================================================
+-- TABLE 11 : UserRoles  (multi-role junction — BCNF)
+-- ─────────────────────────────────────────────────────────────
+-- A user can hold more than one role (e.g. instructor AND proctor).
+-- Users.role stores the PRIMARY display role; UserRoles stores
+-- ADDITIONAL roles.  Composite PK (user_id, role) is in BCNF:
+-- every non-key attribute is determined solely by the whole PK.
+-- ============================================================
+CREATE TABLE UserRoles (
+    user_id  INT  NOT NULL,
+    role     ENUM('student','instructor','proctor','admin') NOT NULL,
+
+    PRIMARY KEY (user_id, role),
+
+    CONSTRAINT fk_userroles_user
         FOREIGN KEY (user_id) REFERENCES Users(user_id)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;

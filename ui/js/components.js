@@ -1,16 +1,20 @@
 // ─────────────────────────────────────────────────────────────
 //  COMPONENTS.JS  —  Pure render functions. Data in → HTML out.
-//  No hardcoded values. All content comes from data.js.
 // ─────────────────────────────────────────────────────────────
 
-// ── HTML escape helper ────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────
 function esc(s) {
   return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+// Wrap header + row HTML into a <table>
+const mkTable = (thHtml, trHtml) =>
+  `<table><thead><tr>${thHtml}</tr></thead><tbody>${trHtml}</tbody></table>`;
+
+// Render a badge span
+const bdg = (cls, text) => `<span class="badge ${cls}">${esc(String(text))}</span>`;
 
 // ── Sidebar Navigation ────────────────────────────────────────
 function renderNav(sections) {
@@ -40,7 +44,6 @@ function renderStatCards(stats) {
 function renderAlerts(alerts) {
   return alerts.map(a => `
     <div class="alert alert-${a.type}">
-      <span>${a.icon}</span>
       <div>
         <strong>${esc(a.name)}</strong> — ${esc(a.msg)}
         ${a.action ? `
@@ -85,7 +88,7 @@ function renderScoreChart({ bars, summary }) {
 function renderMonitorCards(students) {
   return students.map(s => {
     const dotClass  = s.status === 'flagged' ? 'flagged' : '';
-    const suspIcon  = s.suspicion === 0 ? '' : (s.note.startsWith('—') ? '🚨 ' : '⚠️ ');
+    const suspIcon  = s.suspicion === 0 ? '' : ((s.note || '').startsWith('—') ? '[!!] ' : '[!] ');
     const indicators = s.indicators.map(i =>
       `<span class="indicator ${i.cls}"${i.style ? ` style="${i.style}"` : ''}>${i.text}</span>`
     ).join('\n          ');
@@ -107,12 +110,17 @@ function renderMonitorCards(students) {
         <div style="margin-top:10px;font-size:12px;color:${s.suspColor}">
           ${suspIcon}Suspicion Score: <strong>${s.suspicion}</strong>${s.note ? ' ' + esc(s.note) : ''}
         </div>
+        <div style="margin-top:10px;display:flex;gap:6px" onclick="event.stopPropagation()">
+          <button type="button" class="btn btn-outline" style="flex:1;font-size:11px;padding:5px 8px"
+            onclick="warnStudent(${s.attempt_id},'${esc(s.name)}')">Warn</button>
+          <button type="button" class="btn btn-danger" style="flex:1;font-size:11px;padding:5px 8px"
+            onclick="kickStudent(${s.attempt_id},'${esc(s.name)}')">Kick</button>
+        </div>
       </div>`;
   }).join('');
 }
 
 // ── Flagged Attempts Table ────────────────────────────────────
-// Maps suspicion colour variable to a fill- class for the mini progress bar.
 function suspFillClass(color) {
   if (color === 'var(--green)')  return 'fill-green';
   if (color === 'var(--yellow)') return 'fill-yellow';
@@ -120,65 +128,46 @@ function suspFillClass(color) {
 }
 
 function renderFlaggedTable(attempts) {
-  const rows = attempts.map(a => `
-    <tr>
-      <td>
-        <div style="font-weight:600">${esc(a.name)}</div>
-        <div style="font-size:11px;color:var(--text3)">${esc(a.email)}</div>
-      </td>
-      <td><span class="badge ${a.statusBadge}">${a.statusText}</span></td>
-      <td>
-        <div style="display:flex;align-items:center;gap:8px">
-          <div style="font-weight:700;color:${a.suspColor}">${a.suspicion}</div>
-          <div class="progress-bar" style="width:60px">
-            <div class="progress-fill ${suspFillClass(a.suspColor)}" style="width:${a.suspicion}%"></div>
-          </div>
-        </div>
-      </td>
+  return mkTable(
+    '<th>Student</th><th>Exam</th><th>Status</th><th>Suspicion</th><th>Tab Sw.</th><th>Copy-Paste</th><th>Face N/D</th><th>Score</th><th>Actions</th>',
+    attempts.map(a => `<tr>
+      <td><div style="font-weight:600">${esc(a.name)}</div><div style="font-size:11px;color:var(--text3)">${esc(a.email)}</div></td>
+      <td style="font-size:12px;color:var(--text3);max-width:120px">${esc(a.examTitle || '—')}</td>
+      <td>${bdg(a.statusBadge, a.statusText)}</td>
+      <td><div style="display:flex;align-items:center;gap:8px">
+        <div style="font-weight:700;color:${a.suspColor}">${a.suspicion}</div>
+        <div class="progress-bar" style="width:60px"><div class="progress-fill ${suspFillClass(a.suspColor)}" style="width:${a.suspicion}%"></div></div>
+      </div></td>
       <td style="color:${a.tabColor}">${a.tabs}</td>
       <td style="color:${a.pasteColor}">${a.paste}</td>
       <td style="color:${a.faceColor}">${a.face}</td>
       <td>${esc(a.score)} <span class="badge ${a.scoreBadge}" style="font-size:10px">${esc(a.scoreText)}</span></td>
-      <td><span class="badge ${a.flagBadge}">${esc(a.openFlags)}</span></td>
-      <td>
-        <button class="btn btn-outline" style="font-size:11px;padding:5px 10px" onclick="showPage('logs')">View Logs</button>
+      <td style="display:flex;gap:4px;flex-wrap:wrap">
+        <button type="button" class="btn btn-outline" style="font-size:11px;padding:5px 8px" onclick="showPage('logs')">Logs</button>
+        ${a.isLive ? `<button type="button" class="btn btn-outline" style="font-size:11px;padding:5px 8px;color:var(--yellow)" onclick="warnStudent(${a.attemptId},'${esc(a.name)}')">Warn</button>` : ''}
+        ${a.isLive ? `<button type="button" class="btn btn-danger" style="font-size:11px;padding:5px 8px" onclick="kickStudent(${a.attemptId},'${esc(a.name)}')">Kick</button>` : ''}
       </td>
-    </tr>`).join('');
-  return `
-    <table>
-      <thead><tr>
-        <th>Student</th><th>Status</th><th>Suspicion</th>
-        <th>Tab Sw.</th><th>Copy-Paste</th><th>Face N/D</th>
-        <th>Score</th><th>Open Flags</th><th>Action</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+    </tr>`).join('')
+  );
 }
 
 // ── Suspicion Flags Table ─────────────────────────────────────
 function renderFlagsTable(flags) {
-  const rows = flags.map(f => `
-    <tr>
+  return mkTable(
+    '<th>Flag ID</th><th>Student</th><th>Exam</th><th>Flag Type</th><th>Description</th><th>Detected</th><th>Status</th><th>Action</th>',
+    flags.map(f => `<tr>
       <td style="color:var(--text3)">${esc(f.id)}</td>
       <td>${esc(f.student)}</td>
-      <td><span class="badge ${f.badge}">${esc(f.type)}</span></td>
+      <td style="font-size:11px;color:var(--text3)">${esc(f.examTitle || '—')}</td>
+      <td>${bdg(f.badge, f.type)}</td>
       <td style="font-size:12px;color:var(--text3);max-width:200px">${esc(f.desc)}</td>
       <td style="font-size:12px;color:var(--text3)">${esc(f.time)}</td>
-      <td>${f.resolved
-        ? `<span class="badge badge-green">Resolved ✓</span>`
-        : `<span class="badge badge-red">Open</span>`}</td>
+      <td>${f.resolved ? bdg('badge-green', 'Resolved') : bdg('badge-red', 'Open')}</td>
       <td>${f.resolved
         ? `<span style="font-size:12px;color:var(--text3)">By ${esc(f.resolvedBy)}</span>`
-        : `<button class="btn btn-primary" style="font-size:11px;padding:4px 10px" onclick="resolveFlag(${f.numId})">Resolve</button>`}</td>
-    </tr>`).join('');
-  return `
-    <table>
-      <thead><tr>
-        <th>Flag ID</th><th>Student</th><th>Flag Type</th>
-        <th>Description</th><th>Detected At</th><th>Status</th><th>Action</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+        : `<button type="button" class="btn btn-primary" style="font-size:11px;padding:4px 10px" onclick="resolveFlag(${f.numId})">Resolve</button>`}</td>
+    </tr>`).join('')
+  );
 }
 
 // ── Proctor Event Timeline ────────────────────────────────────
@@ -219,9 +208,97 @@ function renderRiskSummary(risk) {
     </div>`;
 }
 
+// ── Course Cards (Courses page) ───────────────────────────────
+function renderCourseCards(courses) {
+  if (!courses.length) return `
+    <div class="card" style="grid-column:1/-1">
+      <div class="card-body" style="padding:32px;text-align:center;color:var(--text3)">
+        No courses yet. Click <strong>+ New Course</strong> to add one.
+      </div>
+    </div>`;
+  return courses.map(c => `
+    <div class="course-card">
+      <div class="course-card-code">${esc(c.course_code)}</div>
+      <div class="course-card-name">${esc(c.course_name)}</div>
+      <div class="course-card-desc">${esc(c.description || 'No description provided.')}</div>
+      <div class="course-card-meta">
+        <span>Instructor: <strong>${esc(c.instructor)}</strong></span>
+        <span>Exams: <strong>${c.exam_count}</strong></span>
+        <span>Students: <strong>${c.student_count}</strong></span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-outline" style="font-size:11px;padding:5px 10px;flex:1"
+          onclick="showPage('exams')">View Exams</button>
+        <button type="button" class="btn btn-danger" style="font-size:11px;padding:5px 10px"
+          data-cid="${c.course_id}" data-cname="${esc(c.course_name)}"
+          onclick="deleteCourse(this.dataset.cid, this.dataset.cname)">Deactivate</button>
+      </div>
+    </div>`).join('');
+}
+
+// ── Exam Questions (Exam Taking overlay) ──────────────────────
+function renderExamQuestions(questions) {
+  if (!questions.length) return `<p style="color:var(--text3);text-align:center;padding:40px">No questions found for this exam.</p>`;
+  return questions.map((q, i) => {
+    const options = buildOptions(q);
+    return `
+      <div class="exam-question-card" data-qid="${q.question_id}">
+        <div class="exam-q-header">
+          <div class="exam-q-num">${i + 1}</div>
+          <div>
+            <div class="exam-q-text">${esc(q.question_text)}</div>
+            <div class="exam-q-marks">${q.marks} mark${q.marks !== 1 ? 's' : ''} · ${esc(q.difficulty_level)}</div>
+          </div>
+        </div>
+        <div class="exam-options">${options}</div>
+      </div>`;
+  }).join('');
+}
+
+function buildOptions(q) {
+  if (q.question_type === 'MCQ') {
+    return [
+      { letter: 'A', text: q.option_a },
+      { letter: 'B', text: q.option_b },
+      { letter: 'C', text: q.option_c },
+      { letter: 'D', text: q.option_d },
+    ].filter(o => o.text).map(o => `
+      <label class="exam-option" onclick="saveAnswer(${q.question_id}, '${o.letter}')">
+        <input type="radio" name="q${q.question_id}" value="${o.letter}" style="pointer-events:none" />
+        <strong>${o.letter}.</strong> ${esc(o.text)}
+      </label>`).join('');
+  }
+  if (q.question_type === 'TRUE_FALSE') {
+    return ['TRUE', 'FALSE'].map(v => `
+      <label class="exam-option" onclick="saveAnswer(${q.question_id}, '${v}')">
+        <input type="radio" name="q${q.question_id}" value="${v}" style="pointer-events:none" />
+        ${v === 'TRUE' ? 'True' : 'False'}
+      </label>`).join('');
+  }
+  // SHORT_ANSWER
+  return `
+    <input type="text" placeholder="Type your answer…"
+      style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+             padding:10px 14px;color:var(--text);font-size:13px"
+      onchange="saveAnswer(${q.question_id}, this.value)" />`;
+}
+
 // ── Student Exam Cards ────────────────────────────────────────
 function renderExamCards(exams) {
-  return exams.map(e => `
+  return exams.map(e => {
+    let actionHtml;
+    if (e.action.startExam) {
+      actionHtml = `<button type="button" class="btn ${e.action.cls}" style="flex:1;font-size:12px"
+        data-eid="${e.action.examId}" data-etitle="${esc(e.title)}"
+        onclick="startExam(this.dataset.eid, this.dataset.etitle)">${esc(e.action.label)}</button>`;
+    } else if (e.action.page) {
+      actionHtml = `<button type="button" class="btn ${e.action.cls}" style="flex:1;font-size:12px"
+        onclick="showPage('${e.action.page}')">${esc(e.action.label)}</button>`;
+    } else {
+      actionHtml = `<button type="button" class="btn ${e.action.cls}" style="flex:1;font-size:12px"
+        disabled>${esc(e.action.label)}</button>`;
+    }
+    return `
     <div class="exam-card">
       <div class="exam-card-top">
         <div>
@@ -246,91 +323,69 @@ function renderExamCards(exams) {
           </div>
         </div>` : `
         <div style="margin-top:8px;font-size:12px;color:var(--text3)">${esc(e.note)}</div>`}
-      <div class="exam-actions">
-        <button class="btn ${e.action.cls}" style="flex:1;font-size:12px"
-          ${e.action.page ? `onclick="showPage('${e.action.page}')"` : ''}>${esc(e.action.label)}</button>
-      </div>
-    </div>`).join('');
+      <div class="exam-actions">${actionHtml}</div>
+    </div>`;
+  }).join('');
 }
 
 // ── Question Difficulty Table ─────────────────────────────────
 function renderDifficultyTable(rows) {
-  const trs = rows.map(r => `
-    <tr>
-      <td>${esc(r.q)}</td>
-      <td style="font-size:12px">${esc(r.topic)}</td>
+  return mkTable(
+    '<th>#</th><th>Question</th><th>Correct%</th><th>Avg Time</th><th>Rating</th>',
+    rows.map(r => `<tr>
+      <td>${esc(r.q)}</td><td style="font-size:12px">${esc(r.topic)}</td>
       <td style="color:${r.pctColor}">${esc(r.pct)}</td>
-      <td>${esc(r.time)}</td>
-      <td><span class="badge ${r.badge}">${esc(r.rating)}</span></td>
-    </tr>`).join('');
-  return `
-    <table>
-      <thead><tr><th>#</th><th>Question</th><th>Correct%</th><th>Avg Time</th><th>Rating</th></tr></thead>
-      <tbody>${trs}</tbody>
-    </table>`;
+      <td>${esc(r.time)}</td><td>${bdg(r.badge, r.rating)}</td>
+    </tr>`).join('')
+  );
 }
 
 // ── Class Ranking Table ───────────────────────────────────────
 function renderRankingTable(rows) {
-  const trs = rows.map(r => `
-    <tr onclick="showPage('${r.flag ? 'flagged' : 'logs'}')" style="cursor:pointer" title="View ${r.flag ? 'flagged attempts' : 'proctor logs'}">
+  return mkTable(
+    '<th>Rank</th><th>Student</th><th>Avg%</th><th>Pass</th><th>Suspicion</th>',
+    rows.map(r => `<tr onclick="showPage('${r.flag ? 'flagged' : 'logs'}')" style="cursor:pointer">
       <td><strong>${esc(r.rank)}</strong></td>
       <td>${esc(r.name)}${r.flag ? ` <span class="badge badge-red" style="font-size:10px">Flagged</span>` : ''}</td>
       <td style="color:${r.pctColor}">${esc(r.pct)}</td>
-      <td><span class="badge ${r.passBadge}">${esc(r.passText)}</span></td>
+      <td>${bdg(r.passBadge, r.passText)}</td>
       <td style="color:${r.suspColor}">${r.susp}</td>
-    </tr>`).join('');
-  return `
-    <table>
-      <thead><tr><th>Rank</th><th>Student</th><th>Avg%</th><th>Pass</th><th>Suspicion</th></tr></thead>
-      <tbody>${trs}</tbody>
-    </table>`;
+    </tr>`).join('')
+  );
 }
 
 // ── DB Schema — Tables overview ───────────────────────────────
 function renderSchemaTable(tables) {
-  const trs = tables.map(t => `
-    <tr>
-      <td>${t.num}</td>
-      <td><strong>${esc(t.name)}</strong></td>
-      <td>${t.rows}</td>
-      <td><span class="badge ${t.entityBadge}">${esc(t.entity)}</span></td>
+  return mkTable(
+    '<th>#</th><th>Table</th><th>Rows (sample)</th><th>Entity Type</th><th>Key Constraints</th>',
+    tables.map(t => `<tr>
+      <td>${t.num}</td><td><strong>${esc(t.name)}</strong></td>
+      <td>${t.rows}</td><td>${bdg(t.entityBadge, t.entity)}</td>
       <td>${esc(t.constraints)}</td>
-    </tr>`).join('');
-  return `
-    <table>
-      <thead><tr><th>#</th><th>Table</th><th>Rows (sample)</th><th>Entity Type</th><th>Key Constraints</th></tr></thead>
-      <tbody>${trs}</tbody>
-    </table>`;
+    </tr>`).join('')
+  );
 }
 
 // ── Triggers Table ────────────────────────────────────────────
 function renderTriggersTable(triggers) {
-  const trs = triggers.map(t => `
-    <tr>
+  return mkTable(
+    '<th>Trigger</th><th>Event</th><th>Purpose</th>',
+    triggers.map(t => `<tr>
       <td style="font-size:11px;color:var(--accent2)">${esc(t.name)}</td>
-      <td>${esc(t.event)}</td>
-      <td style="font-size:12px">${esc(t.purpose)}</td>
-    </tr>`).join('');
-  return `
-    <table>
-      <thead><tr><th>Trigger</th><th>Event</th><th>Purpose</th></tr></thead>
-      <tbody>${trs}</tbody>
-    </table>`;
+      <td>${esc(t.event)}</td><td style="font-size:12px">${esc(t.purpose)}</td>
+    </tr>`).join('')
+  );
 }
 
 // ── Stored Procedures Table ───────────────────────────────────
 function renderProceduresTable(procedures) {
-  const trs = procedures.map(p => `
-    <tr>
+  return mkTable(
+    '<th>Procedure</th><th>Called By</th>',
+    procedures.map(p => `<tr>
       <td style="font-size:11px;color:var(--green)">${esc(p.name)}</td>
       <td style="font-size:12px">${esc(p.calledBy)}</td>
-    </tr>`).join('');
-  return `
-    <table>
-      <thead><tr><th>Procedure</th><th>Called By</th></tr></thead>
-      <tbody>${trs}</tbody>
-    </table>`;
+    </tr>`).join('')
+  );
 }
 
 // ── Exams Page ────────────────────────────────────────────────
@@ -398,7 +453,7 @@ function renderQuestionsGroups(groups) {
     const rows = g.questions.map(q => {
       const opts = q.options.map(o => `
         <span style="margin-right:12px${o.letter === q.answer ? ';color:var(--green);font-weight:700' : ';color:var(--text3)'}">
-          ${esc(o.letter)}. ${esc(o.text)}${o.letter === q.answer ? ' ✓' : ''}
+          ${esc(o.letter)}. ${esc(o.text)}${o.letter === q.answer ? ' [correct]' : ''}
         </span>`).join('');
       return `
         <tr>
@@ -420,7 +475,7 @@ function renderQuestionsGroups(groups) {
     return `
       <div class="card">
         <div class="card-header">
-          <span class="card-title">📝 ${esc(g.examTitle)}</span>
+          <span class="card-title">${esc(g.examTitle)}</span>
           <div style="display:flex;align-items:center;gap:12px">
             <span class="topbar-status">${esc(g.course)} · ${g.questions.length} questions</span>
             <button class="btn btn-primary" style="font-size:12px;padding:6px 14px"

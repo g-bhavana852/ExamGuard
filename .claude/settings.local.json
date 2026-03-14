@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/Sadhana/Projects/DBMS -type f -name *.js -o -name *.json -o -name *.sql -o -name *.html -o -name *.css -o -name *.md -o -name .env* -o -name *.config.*)",
+      "Bash(find /c/Users/Sadhana/Projects/DBMS -type f \\\\\\(-name *.js -o -name *.json -o -name *.sql -o -name *.html -o -name *.css -o -name *.md -o -name .env* \\\\\\) ! -path */node_modules/*)",
+      "Bash(mysql -u root ExamProctor -e \"ALTER TABLE Users ADD COLUMN IF NOT EXISTS username VARCHAR\\(50\\) NULL, ADD UNIQUE KEY IF NOT EXISTS uq_users_username \\(username\\);\")",
+      "Bash(mysql -u root -pJack13@$ ExamProctor -e \"ALTER TABLE Users ADD COLUMN username VARCHAR\\(50\\) NULL, ADD UNIQUE KEY uq_users_username \\(username\\);\")",
+      "Bash(where mysql:*)",
+      "Read(//c/Program Files/MySQL/**)",
+      "Bash(curl -s http://localhost:3000/api/dashboard)",
+      "Bash(netstat -ano)",
+      "Bash(cmd /c \"netstat -aon | findstr :3000 | findstr LISTENING\")",
+      "Bash(curl -s --max-time 5 http://localhost:3000/api/login -X POST -H \"Content-Type: application/json\" -d '{\"\"username\"\":\"\"admin\"\",\"\"password\"\":\"\"Admin@2025\"\"}')"
+    ]
+  }
+}

@@ -159,6 +159,21 @@ END //
 --   • Increment suspicion_score based on event severity
 --   • Update per-event type counters on ExamAttempts
 --   Keeps the ExamAttempts row always current for fast dashboards.
+--
+-- SUSPICION SCORE FORMULA
+-- ─────────────────────────────────────────────────────────────
+--   Each ProctorLog event adds a severity-weighted increment:
+--
+--     Severity   │ Increment
+--     ───────────┼──────────
+--     INFO       │  +0  (exam start/submit — normal lifecycle)
+--     LOW        │  +3  (right-click, fullscreen exit)
+--     MEDIUM     │  +7  (tab switch, idle warning)
+--     HIGH       │ +15  (copy-paste, suspicious typing)
+--     CRITICAL   │ +25  (multiple logins, IP change mid-exam)
+--
+--   Score is capped at 100 via LEAST(100, score + increment).
+--   Trigger T5 fires when score crosses 70 → auto-flag attempt.
 -- ============================================================
 CREATE TRIGGER trg_update_suspicion_score
 AFTER INSERT ON ProctorLogs

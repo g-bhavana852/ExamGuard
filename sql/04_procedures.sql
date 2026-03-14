@@ -31,7 +31,7 @@ CREATE PROCEDURE sp_start_exam(
     OUT p_attempt_id  INT,
     OUT p_message     VARCHAR(255)
 )
-BEGIN
+sp_start_exam: BEGIN
     DECLARE v_enrolled INT DEFAULT 0;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -55,7 +55,7 @@ BEGIN
         IF v_enrolled = 0 THEN
             SET p_message = 'ERROR: Student is not enrolled in this exam course.';
             ROLLBACK;
-            LEAVE;   -- exit SP
+            LEAVE sp_start_exam;   -- exit SP (requires labeled BEGIN block)
         END IF;
 
         -- 2. Create attempt (T1 fires here for all validations)

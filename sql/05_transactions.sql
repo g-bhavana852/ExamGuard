@@ -78,13 +78,14 @@ SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 START TRANSACTION;
 
     -- Upsert: insert if first answer, update if changing mind
+    -- Note: VALUES() is deprecated in MySQL 8.0.20+; use row alias instead
     INSERT INTO StudentAnswers
         (attempt_id, question_id, selected_option, time_taken_seconds)
     VALUES
-        (1001, 42, 'B', 45)
+        (1001, 42, 'B', 45) AS new_ans
     ON DUPLICATE KEY UPDATE
-        selected_option    = VALUES(selected_option),
-        time_taken_seconds = VALUES(time_taken_seconds),
+        selected_option    = new_ans.selected_option,
+        time_taken_seconds = new_ans.time_taken_seconds,
         answered_at        = NOW();
 
 COMMIT;
@@ -184,6 +185,63 @@ START TRANSACTION;
             COMMIT;
             SELECT CONCAT('COMMIT: Exam published with ', @q_count, ' questions.') AS result;
         END IF;
+    END IF;
+
+
+-- ============================================================
+-- TXN-6 : Concurrent Double-Submission (SERIALIZABLE guard)
+-- ─────────────────────────────────────────────────────────────
+-- Scenario: Two browser tabs (network glitch / double-click)
+--   race to submit the same attempt simultaneously.
+-- Expected: First session commits; second detects status ≠
+--   'in_progress' and rolls back, returning an informative error.
+-- This is the concurrency scenario that SERIALIZABLE prevents.
+-- ============================================================
+
+-- ── Session A (first to acquire the lock) ─────────────────────
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+
+    SELECT attempt_id, status
+    FROM   ExamAttempts
+    WHERE  attempt_id = 1001
+    FOR UPDATE;                  -- acquires exclusive row lock
+
+    -- At this point Session B's SELECT … FOR UPDATE will BLOCK
+    -- until Session A either commits or rolls back.
+
+    UPDATE ExamAttempts
+    SET    status       = 'submitted',
+           submitted_at = NOW(),
+           score        = 38.00,
+           percentage   = 76.00
+    WHERE  attempt_id   = 1001
+      AND  status       = 'in_progress';
+
+COMMIT;                          -- lock released here
+SELECT 'Session A: COMMIT — submission accepted.' AS result;
+
+-- ── Session B (arrives after Session A commits) ───────────────
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+
+    SELECT attempt_id, status
+    FROM   ExamAttempts
+    WHERE  attempt_id = 1001
+    FOR UPDATE;                  -- lock available now; reads updated row
+
+    -- SERIALIZABLE ensures Session B reads status = 'submitted'
+    -- (not the stale 'in_progress' it might have seen earlier)
+    SET @current_status = (SELECT status FROM ExamAttempts WHERE attempt_id = 1001);
+
+    IF @current_status <> 'in_progress' THEN
+        ROLLBACK;
+        SELECT CONCAT('Session B: ROLLBACK — attempt already ', @current_status, '.') AS result;
+    ELSE
+        -- Would only reach here if status were still in_progress
+        UPDATE ExamAttempts SET status = 'submitted' WHERE attempt_id = 1001;
+        COMMIT;
+        SELECT 'Session B: COMMIT (unexpected — lock ordering prevented this).' AS result;
     END IF;
 
 
