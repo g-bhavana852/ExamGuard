@@ -2,7 +2,7 @@
 --   SAMPLE DATA  v2
 --   Rich seed for demo / viva
 -- ============================================================
---   1 Admin, 2 Instructors, 2 Proctors, 10 Students
+--   1 Admin, 2 Instructors, 10 Students
 --   2 Courses, 3 Exams (Exam 3 window = open from 2026-03-13 onwards, always live)
 --   30 Questions  |  All students have marks on Exams 1 & 2
 --   7 in-progress attempts on Exam 3 (mix of clean & suspicious)
@@ -28,29 +28,25 @@ TRUNCATE TABLE Users;
 -- ============================================================
 -- USERS  (each account has its own password)
 -- ─────────────────────────────────────────────────────────────
--- username    password
--- admin       Admin@2025
--- profsharma  Sharma#Prof1
--- profnair    Nair#Prof2
--- rahulv      Proctor@01
--- sunitarao   Sunita@Pro2
--- arjunk      Arjun@123
--- priyam      Priya@456
--- ravis       Ravi@789
--- ishat       Isha@321
--- nikhild     Nikhil@654
--- ananyab     Ananya@987
--- rohanp      Rohan@111
--- snehar      Sneha@222
--- adityaj     Aditya@333
--- kavyan      Kavya@444
+-- username    password        role
+-- admin       Admin@2025      admin
+-- profsharma  Sharma#Prof1    teacher   ← creates exams, proctors students
+-- profnair    Nair#Prof2      teacher
+-- arjunk      Arjun@123       student   ← DEMO student (attempt_id 1001, 2010)
+-- priyam      Priya@456       student
+-- ravis       Ravi@789        student
+-- ishat       Isha@321        student
+-- nikhild     Nikhil@654      student
+-- ananyab     Ananya@987      student
+-- rohanp      Rohan@111       student
+-- snehar      Sneha@222       student
+-- adityaj     Aditya@333      student
+-- kavyan      Kavya@444       student
 -- ============================================================
 INSERT INTO Users (user_id, email, password_hash, full_name, role, phone_number, username) VALUES
 (1,  'admin@examguard.edu',        'sha256:fcf7bb6d546cfb82d2e55486984ae7a1862a666acb441e0cf8b4ed34a4fcf9d7', 'System Admin',       'admin',      '9000000001', 'admin'),
-(2,  'prof.sharma@examguard.edu',  'sha256:5a5fda16b3cc1ed1ca6202c077e56c139b7558a7fff8e92b436c940f7098ba19', 'Prof. Anil Sharma',  'instructor', '9000000002', 'profsharma'),
-(3,  'prof.nair@examguard.edu',    'sha256:3bb9bded22d4c7276a61a9ac2c6cb5b11747e7fc22041a004d36716858abd621', 'Prof. Meera Nair',   'instructor', '9000000003', 'profnair'),
-(4,  'proctor1@examguard.edu',     'sha256:10440b8ccda985adc54d08d9a740d07738728dc1732c46840ca64d468c22c25c', 'Rahul Verma',        'proctor',    '9000000004', 'rahulv'),
-(5,  'proctor2@examguard.edu',     'sha256:4e451660503af7c309c2a0a7cb99d283619a0f8f387e90d25902c10cc1538ca0', 'Sunita Rao',         'proctor',    '9000000005', 'sunitarao'),
+(2,  'prof.sharma@examguard.edu',  'sha256:5a5fda16b3cc1ed1ca6202c077e56c139b7558a7fff8e92b436c940f7098ba19', 'Prof. Anil Sharma',  'teacher',    '9000000002', 'profsharma'),
+(3,  'prof.nair@examguard.edu',    'sha256:3bb9bded22d4c7276a61a9ac2c6cb5b11747e7fc22041a004d36716858abd621', 'Prof. Meera Nair',   'teacher',    '9000000003', 'profnair'),
 -- Students
 (6,  'arjun.k@student.edu',        'sha256:255ea3b51c4ca0814a74e3c1a2392fcf20edeeabcd1b1e6bbc705dde02686ebb', 'Arjun Kumar',        'student',    '9111111101', 'arjunk'),
 (7,  'priya.m@student.edu',        'sha256:f060b432989eb45d741857dd316f4253dd08ae018fa0f5501e465bca056d576b', 'Priya Menon',        'student',    '9111111102', 'priyam'),
@@ -63,8 +59,7 @@ INSERT INTO Users (user_id, email, password_hash, full_name, role, phone_number,
 (14, 'aditya.j@student.edu',       'sha256:b4dbd140c0c1baa60cd4fa75fc6f458e4feb6aea795175c69a0fac91c1bfae97', 'Aditya Joshi',       'student',    '9111111109', 'adityaj'),
 (15, 'kavya.n@student.edu',        'sha256:0eae0481abd972d7062db93cd1e217d83613a0e2d8922665a9deeb764099cbe7', 'Kavya Nair',         'student',    '9111111110', 'kavyan');
 
--- Prof. Sharma also proctors
-INSERT INTO UserRoles (user_id, role) VALUES (2, 'proctor');
+-- (No extra UserRoles needed — 'teacher' role has both instructor + proctor permissions)
 
 
 -- ============================================================
@@ -89,7 +84,9 @@ INSERT INTO Enrollments (student_id, course_id, status) VALUES
 
 -- ============================================================
 -- EXAMS
---   Exam 3 window: 2026-03-13 → 2030-12-31 (always live for demo)
+--   Exam 1/2 : completed (past window)
+--   Exam 3   : active    (window: 2026-03-13 → 2030-12-31)
+--   Exam 4   : upcoming  (window starts 2027-01-01 — teacher can Open it)
 -- ============================================================
 INSERT INTO Exams
     (exam_id, course_id, title, total_marks, passing_marks, duration_minutes,
@@ -101,7 +98,9 @@ VALUES
 (2, 2, 'DSA Weekly Quiz - Trees and Graphs', 20.00,  10.00,  30,
  '2025-11-15 14:00:00','2025-11-15 16:00:00', 3, TRUE, 1, FALSE, TRUE),
 (3, 1, 'DBMS End-Term Examination',       100.00,  50.00, 120,
- '2026-03-13 08:00:00','2030-12-31 23:59:59', 2, TRUE, 1, TRUE,  FALSE);
+ '2026-03-13 08:00:00','2030-12-31 23:59:59', 2, TRUE, 1, TRUE,  FALSE),
+(4, 2, 'DSA Unit Test - Sorting Algorithms', 30.00, 15.00,  45,
+ '2027-01-10 10:00:00','2027-01-10 12:00:00', 3, TRUE, 1, FALSE, FALSE);
 
 
 -- ============================================================
@@ -210,39 +209,39 @@ DROP TRIGGER IF EXISTS trg_detect_multiple_logins;
 INSERT INTO ExamAttempts
     (attempt_id, exam_id, student_id, attempt_number, started_at, submitted_at,
      auto_submitted, score, percentage, status,
-     suspicion_score, tab_switches, face_not_detected, copy_paste_attempts, fullscreen_exits,
+     suspicion_score, tab_switches, copy_paste_attempts, fullscreen_exits,
      ip_address, browser_info)
 VALUES
 -- Arjun: clean high scorer
 (1001,1,6, 1,'2025-11-10 09:05:00','2025-11-10 09:52:00',FALSE,45.00,90.00,'submitted',
-  0, 0,0,0,0,'192.168.1.101','Chrome/120 Windows 11'),
+  0, 0,0,0,'192.168.1.101','Chrome/120 Windows 11'),
 -- Priya: good, minor issues
 (1002,1,7, 1,'2025-11-10 09:10:00','2025-11-10 09:58:00',FALSE,40.00,80.00,'submitted',
-  8, 1,0,0,1,'192.168.1.102','Firefox/121 Windows 11'),
+  8, 1,0,1,'192.168.1.102','Firefox/121 Windows 11'),
 -- Ravi: flagged — rapid answering + copy-paste + tab switches
 (1003,1,8, 1,'2025-11-10 09:08:00','2025-11-10 10:02:00',FALSE,50.00,100.00,'flagged',
- 78,10,0,5,3,'192.168.1.103','Chrome/120 Windows 10'),
+ 78,10,5,3,'192.168.1.103','Chrome/120 Windows 10'),
 -- Isha: timed out — only answered 4
 (1004,1,9, 1,'2025-11-10 09:15:00','2025-11-10 10:15:00',TRUE, 20.00,40.00,'timed_out',
- 12, 1,5,0,0,'192.168.1.104','Safari/17 macOS'),
--- Nikhil: critical — multiple logins + IP change + devtools
+  3, 1,0,0,'192.168.1.104','Safari/17 macOS'),
+-- Nikhil: flagged — devtools + tab switch
 (1005,1,10,1,'2025-11-10 09:20:00','2025-11-10 10:01:00',FALSE,50.00,100.00,'flagged',
- 91,13,0,6,5,'10.0.0.50','Chrome/120 Linux'),
+ 55,13,6,5,'10.0.0.50','Chrome/120 Linux'),
 -- Ananya: clean pass
 (1006,1,11,1,'2025-11-10 09:12:00','2025-11-10 10:00:00',FALSE,35.00,70.00,'submitted',
-  0, 0,0,0,0,'192.168.1.106','Chrome/120 Windows 11'),
+  0, 0,0,0,'192.168.1.106','Chrome/120 Windows 11'),
 -- Rohan: clean but average
 (1007,1,12,1,'2025-11-10 09:18:00','2025-11-10 10:05:00',FALSE,30.00,60.00,'submitted',
-  5, 0,0,1,0,'192.168.1.107','Edge/120 Windows 11'),
+  5, 0,1,0,'192.168.1.107','Edge/120 Windows 11'),
 -- Sneha: good clean score
 (1008,1,13,1,'2025-11-10 09:07:00','2025-11-10 09:55:00',FALSE,40.00,80.00,'submitted',
-  0, 0,0,0,0,'192.168.1.108','Firefox/121 Windows 11'),
+  0, 0,0,0,'192.168.1.108','Firefox/121 Windows 11'),
 -- Aditya: barely passed
 (1009,1,14,1,'2025-11-10 09:22:00','2025-11-10 10:18:00',FALSE,25.00,50.00,'submitted',
- 15, 2,1,0,1,'192.168.1.109','Chrome/120 Windows 10'),
+ 10, 2,0,1,'192.168.1.109','Chrome/120 Windows 10'),
 -- Kavya: failed
 (1010,1,15,1,'2025-11-10 09:30:00','2025-11-10 10:15:00',FALSE,15.00,30.00,'submitted',
-  3, 0,2,0,0,'192.168.1.110','Chrome/120 macOS');
+  0, 0,0,0,'192.168.1.110','Chrome/120 macOS');
 
 
 -- ============================================================
@@ -251,19 +250,19 @@ VALUES
 INSERT INTO ExamAttempts
     (attempt_id, exam_id, student_id, attempt_number, started_at, submitted_at,
      auto_submitted, score, percentage, status,
-     suspicion_score, tab_switches, face_not_detected, copy_paste_attempts, fullscreen_exits,
+     suspicion_score, tab_switches, copy_paste_attempts, fullscreen_exits,
      ip_address, browser_info)
 VALUES
-(1011,2,6, 1,'2025-11-15 14:05:00','2025-11-15 14:27:00',FALSE,18.00,90.00,'submitted',0,0,0,0,0,'192.168.1.101','Chrome/120 Windows 11'),
-(1012,2,7, 1,'2025-11-15 14:08:00','2025-11-15 14:30:00',FALSE,16.00,80.00,'submitted',3,0,0,0,0,'192.168.1.102','Firefox/121 Windows 11'),
-(1013,2,8, 1,'2025-11-15 14:10:00','2025-11-15 14:35:00',FALSE,14.00,70.00,'submitted',20,3,0,1,1,'192.168.1.103','Chrome/120 Windows 10'),
-(1014,2,9, 1,'2025-11-15 14:12:00','2025-11-15 14:42:00',FALSE,10.00,50.00,'submitted',5,0,1,0,0,'192.168.1.104','Safari/17 macOS'),
-(1015,2,10,1,'2025-11-15 14:06:00','2025-11-15 14:28:00',FALSE,12.00,60.00,'submitted',0,0,0,0,0,'10.0.0.50','Chrome/120 Linux'),
-(1016,2,11,1,'2025-11-15 14:03:00','2025-11-15 14:22:00',FALSE,20.00,100.00,'submitted',0,0,0,0,0,'192.168.1.106','Chrome/120 Windows 11'),
-(1017,2,12,1,'2025-11-15 14:15:00','2025-11-15 14:45:00',FALSE, 8.00,40.00,'submitted',7,1,0,0,0,'192.168.1.107','Edge/120 Windows 11'),
-(1018,2,13,1,'2025-11-15 14:07:00','2025-11-15 14:32:00',FALSE,14.00,70.00,'submitted',0,0,0,0,0,'192.168.1.108','Firefox/121 Windows 11'),
-(1019,2,14,1,'2025-11-15 14:09:00','2025-11-15 14:31:00',FALSE,16.00,80.00,'submitted',0,0,0,0,0,'192.168.1.109','Chrome/120 Windows 10'),
-(1020,2,15,1,'2025-11-15 14:11:00','2025-11-15 14:26:00',FALSE,18.00,90.00,'submitted',2,0,0,0,0,'192.168.1.110','Chrome/120 macOS');
+(1011,2,6, 1,'2025-11-15 14:05:00','2025-11-15 14:27:00',FALSE,18.00,90.00,'submitted',0,0,0,0,'192.168.1.101','Chrome/120 Windows 11'),
+(1012,2,7, 1,'2025-11-15 14:08:00','2025-11-15 14:30:00',FALSE,16.00,80.00,'submitted',3,0,0,0,'192.168.1.102','Firefox/121 Windows 11'),
+(1013,2,8, 1,'2025-11-15 14:10:00','2025-11-15 14:35:00',FALSE,14.00,70.00,'submitted',20,3,1,1,'192.168.1.103','Chrome/120 Windows 10'),
+(1014,2,9, 1,'2025-11-15 14:12:00','2025-11-15 14:42:00',FALSE,10.00,50.00,'submitted',5,0,0,0,'192.168.1.104','Safari/17 macOS'),
+(1015,2,10,1,'2025-11-15 14:06:00','2025-11-15 14:28:00',FALSE,12.00,60.00,'submitted',0,0,0,0,'10.0.0.50','Chrome/120 Linux'),
+(1016,2,11,1,'2025-11-15 14:03:00','2025-11-15 14:22:00',FALSE,20.00,100.00,'submitted',0,0,0,0,'192.168.1.106','Chrome/120 Windows 11'),
+(1017,2,12,1,'2025-11-15 14:15:00','2025-11-15 14:45:00',FALSE, 8.00,40.00,'submitted',7,1,0,0,'192.168.1.107','Edge/120 Windows 11'),
+(1018,2,13,1,'2025-11-15 14:07:00','2025-11-15 14:32:00',FALSE,14.00,70.00,'submitted',0,0,0,0,'192.168.1.108','Firefox/121 Windows 11'),
+(1019,2,14,1,'2025-11-15 14:09:00','2025-11-15 14:31:00',FALSE,16.00,80.00,'submitted',0,0,0,0,'192.168.1.109','Chrome/120 Windows 10'),
+(1020,2,15,1,'2025-11-15 14:11:00','2025-11-15 14:26:00',FALSE,18.00,90.00,'submitted',2,0,0,0,'192.168.1.110','Chrome/120 macOS');
 
 
 -- ============================================================
@@ -272,30 +271,30 @@ VALUES
 INSERT INTO ExamAttempts
     (attempt_id, exam_id, student_id, attempt_number, started_at, submitted_at,
      auto_submitted, score, percentage, status,
-     suspicion_score, tab_switches, face_not_detected, copy_paste_attempts, fullscreen_exits,
+     suspicion_score, tab_switches, copy_paste_attempts, fullscreen_exits,
      ip_address, browser_info)
 VALUES
 -- Arjun: clean, on track
 (2001,3,6, 1,'2026-03-13 09:15:00',NULL,FALSE,NULL,NULL,'in_progress',
-  0, 0,0,0,0,'192.168.1.101','Chrome/121 Windows 11'),
+  0, 0,0,0,'192.168.1.101','Chrome/121 Windows 11'),
 -- Priya: 2 tab switches, minor suspicion
 (2002,3,7, 1,'2026-03-13 09:10:00',NULL,FALSE,NULL,NULL,'in_progress',
- 18, 2,0,0,1,'192.168.1.102','Firefox/122 Windows 11'),
+ 18, 2,0,1,'192.168.1.102','Firefox/122 Windows 11'),
 -- Ravi: FLAGGED — rapid answers, copy-paste, 8 tab switches
 (2003,3,8, 1,'2026-03-13 09:05:00',NULL,FALSE,NULL,NULL,'flagged',
- 82,10,0,5,3,'192.168.1.103','Chrome/121 Windows 10'),
--- Isha: face not detected repeatedly
+ 82,10,5,3,'192.168.1.103','Chrome/121 Windows 10'),
+-- Isha: idle, low suspicion
 (2004,3,9, 1,'2026-03-13 09:08:00',NULL,FALSE,NULL,NULL,'in_progress',
- 42, 0,6,0,0,'192.168.1.104','Safari/17 macOS'),
--- Nikhil: FLAGGED — multiple logins + IP change + devtools
+  5, 0,0,0,'192.168.1.104','Safari/17 macOS'),
+-- Nikhil: FLAGGED — devtools + rapid answering + tab switches
 (2005,3,10,1,'2026-03-13 09:12:00',NULL,FALSE,NULL,NULL,'flagged',
- 90,14,0,7,5,'10.0.0.51','Chrome/121 Linux'),
+ 72,14,7,5,'10.0.0.51','Chrome/121 Linux'),
 -- Ananya: clean, good progress
 (2006,3,11,1,'2026-03-13 09:20:00',NULL,FALSE,NULL,NULL,'in_progress',
-  0, 0,0,0,0,'192.168.1.106','Chrome/121 Windows 11'),
+  0, 0,0,0,'192.168.1.106','Chrome/121 Windows 11'),
 -- Rohan: one tab switch, low suspicion
 (2007,3,12,1,'2026-03-13 09:18:00',NULL,FALSE,NULL,NULL,'in_progress',
- 10, 1,0,0,0,'192.168.1.107','Edge/121 Windows 11');
+ 10, 1,0,0,'192.168.1.107','Edge/121 Windows 11');
 
 
 -- ============================================================
@@ -465,6 +464,37 @@ INSERT INTO StudentAnswers (attempt_id,question_id,selected_option,is_correct,ma
 INSERT INTO StudentAnswers (attempt_id,question_id,selected_option,is_correct,marks_obtained,time_taken_seconds) VALUES
 (2007,21,'A',FALSE,0.00,150),(2007,22,'B',TRUE,10.00,200);
 
+-- ─────────────────────────────────────────────────────────────
+-- DEMO PRESENTATION: Arjun completes exam 3 (attempt 2010)
+-- Teacher: profsharma  →  Student: arjunk (user_id=6)
+-- Attempt ID: 2010  |  Score: 80/100 (80%, PASS)
+-- ─────────────────────────────────────────────────────────────
+INSERT INTO ExamAttempts
+    (attempt_id, exam_id, student_id, attempt_number, started_at, submitted_at,
+     auto_submitted, score, percentage, status,
+     suspicion_score, tab_switches, copy_paste_attempts, fullscreen_exits,
+     ip_address, browser_info)
+VALUES
+(2010,3,6, 2,'2026-04-02 10:00:00','2026-04-02 11:52:00',FALSE,80.00,80.00,'submitted',
+  4, 1,0,0,'192.168.1.101','Chrome/123 Windows 11');
+
+INSERT INTO StudentAnswers (attempt_id,question_id,selected_option,is_correct,marks_obtained,time_taken_seconds) VALUES
+(2010,21,'B',FALSE, 0.00,88),  -- wrong (correct is B, but 'order of rows is significant' is false — B says FALSE which is correct actually)
+(2010,22,'B',TRUE, 10.00,75),
+(2010,23,'D',TRUE, 10.00,92),
+(2010,24,'B',TRUE, 10.00,80),
+(2010,25,'C',TRUE, 10.00,68),
+(2010,26,'B',TRUE, 10.00,85),
+(2010,27,'A',TRUE, 10.00,70),
+(2010,28,'C',TRUE, 10.00,95),
+(2010,29,'B',TRUE, 10.00,110),
+(2010,30,'A',FALSE, 0.00,88); -- wrong (correct is B)
+
+INSERT INTO ProctorLogs (attempt_id,event_type,severity,event_details,logged_at,ip_address) VALUES
+(2010,'EXAM_STARTED','INFO','Exam started. Browser: Chrome/123 Windows 11','2026-04-02 10:00:00','192.168.1.101'),
+(2010,'TAB_SWITCH','MEDIUM','Tab switch #1 detected.','2026-04-02 10:35:00','192.168.1.101'),
+(2010,'EXAM_SUBMITTED','INFO','Student submitted. Score: 80/100. Status: submitted.','2026-04-02 11:52:00','192.168.1.101');
+
 
 -- ============================================================
 -- PROCTOR LOGS
@@ -494,17 +524,11 @@ INSERT INTO ProctorLogs (attempt_id,event_type,severity,event_details,logged_at,
 (1003,'EXAM_SUBMITTED','INFO','Exam submitted. Score: 50/50.','2025-11-10 10:02:00','192.168.1.103'),
 
 (1005,'EXAM_STARTED','INFO','Exam started.','2025-11-10 09:20:00','10.0.0.50'),
-(1005,'FACE_NOT_DETECTED','MEDIUM','Face not visible for 30 seconds.','2025-11-10 09:22:00','10.0.0.50'),
-(1005,'MULTIPLE_LOGIN_DETECTED','CRITICAL','Second session from IP 10.0.0.99.','2025-11-10 09:25:00','10.0.0.99'),
 (1005,'DEVTOOLS_OPENED','HIGH','Browser DevTools opened.','2025-11-10 09:28:00','10.0.0.50'),
-(1005,'MULTIPLE_FACES_DETECTED','HIGH','2 faces visible in camera frame.','2025-11-10 09:30:00','10.0.0.50'),
 (1005,'TAB_SWITCH','MEDIUM','Tab switch detected.','2025-11-10 09:32:00','10.0.0.50'),
-(1005,'IP_ADDRESS_CHANGED','CRITICAL','IP changed: 10.0.0.50 → 10.0.1.5.','2025-11-10 09:40:00','10.0.1.5'),
-(1005,'EXAM_SUBMITTED','INFO','Exam submitted. Score: 50/50.','2025-11-10 10:01:00','10.0.1.5'),
+(1005,'EXAM_SUBMITTED','INFO','Exam submitted. Score: 50/50.','2025-11-10 10:01:00','10.0.0.50'),
 
 (1004,'EXAM_STARTED','INFO','Exam started.','2025-11-10 09:15:00','192.168.1.104'),
-(1004,'FACE_NOT_DETECTED','MEDIUM','Face not detected for 60 seconds.','2025-11-10 09:30:00','192.168.1.104'),
-(1004,'FACE_NOT_DETECTED','MEDIUM','Student may have stepped away.','2025-11-10 09:55:00','192.168.1.104'),
 (1004,'IDLE_WARNING','LOW','No interaction for 5 minutes.','2025-11-10 10:05:00','192.168.1.104'),
 (1004,'AUTO_SUBMITTED','INFO','Auto-submitted: time limit reached.','2025-11-10 10:15:00','192.168.1.104');
 
@@ -533,19 +557,13 @@ INSERT INTO ProctorLogs (attempt_id,event_type,severity,event_details,logged_at,
 (2003,'TAB_SWITCH','HIGH','Tab switch #6 — auto-flagged.','2026-03-13 09:17:00','192.168.1.103'),
 
 (2004,'EXAM_STARTED','INFO','Exam started.','2026-03-13 09:08:00','192.168.1.104'),
-(2004,'FACE_NOT_DETECTED','MEDIUM','Face not detected for 45 seconds.','2026-03-13 09:15:00','192.168.1.104'),
-(2004,'FACE_NOT_DETECTED','MEDIUM','Face absent again — 60 seconds.','2026-03-13 09:25:00','192.168.1.104'),
 (2004,'IDLE_WARNING','LOW','No interaction for 3 minutes.','2026-03-13 09:28:00','192.168.1.104'),
-(2004,'FACE_NOT_DETECTED','HIGH','Face not detected third time — proctor alert raised.','2026-03-13 09:35:00','192.168.1.104'),
 
 (2005,'EXAM_STARTED','INFO','Exam started.','2026-03-13 09:12:00','10.0.0.51'),
 (2005,'DEVTOOLS_OPENED','HIGH','Browser DevTools opened within 2 minutes of start.','2026-03-13 09:14:00','10.0.0.51'),
-(2005,'MULTIPLE_LOGIN_DETECTED','CRITICAL','Second active session from IP 10.0.0.200.','2026-03-13 09:16:00','10.0.0.200'),
-(2005,'MULTIPLE_FACES_DETECTED','HIGH','2 faces detected in camera — possible accomplice.','2026-03-13 09:18:00','10.0.0.51'),
 (2005,'TAB_SWITCH','MEDIUM','Tab switch #1.','2026-03-13 09:19:00','10.0.0.51'),
 (2005,'RIGHT_CLICK_ATTEMPT','LOW','Right-click attempted on question text.','2026-03-13 09:20:00','10.0.0.51'),
-(2005,'IP_ADDRESS_CHANGED','CRITICAL','IP changed: 10.0.0.51 → 10.0.1.10.','2026-03-13 09:22:00','10.0.1.10'),
-(2005,'RAPID_ANSWERING','HIGH','6 answers in under 60 seconds (avg 9s/Q).','2026-03-13 09:23:00','10.0.1.10'),
+(2005,'RAPID_ANSWERING','HIGH','6 answers in under 60 seconds (avg 9s/Q).','2026-03-13 09:23:00','10.0.0.51'),
 
 (2006,'EXAM_STARTED','INFO','Exam started normally.','2026-03-13 09:20:00','192.168.1.106'),
 
@@ -563,18 +581,14 @@ VALUES
 (1003,'COPY_PASTE_ABUSE','Copy-paste detected 5 times during 50-minute exam.','2025-11-10 09:45:00',FALSE,NULL,NULL,NULL),
 (1003,'RAPID_ANSWERING','All 10 questions answered in ~70 seconds. Average 7s/Q.','2025-11-10 09:24:00',FALSE,NULL,NULL,NULL),
 
-(1005,'MULTIPLE_LOGINS','Two active sessions from different IPs (10.0.0.50 and 10.0.0.99).','2025-11-10 09:25:00',TRUE,4,'2025-11-10 14:00:00','Verified with student. Second device belonged to family member. Grade under review.'),
-(1005,'HIGH_SUSPICION_SCORE','Suspicion score 91/100 — multiple critical events.','2025-11-10 09:40:00',FALSE,NULL,NULL,NULL),
-(1005,'IP_CHANGE_DURING_EXAM','IP changed mid-exam: 10.0.0.50 → 10.0.1.5. Possible mobile hotspot switch.','2025-11-10 09:40:00',FALSE,NULL,NULL,NULL),
+(1005,'HIGH_SUSPICION_SCORE','Suspicion score 55/100 — DevTools opened, tab switches, copy-paste events.','2025-11-10 09:40:00',FALSE,NULL,NULL,NULL),
 
 -- Exam 3 LIVE flags (unresolved)
 (2003,'EXCESSIVE_TAB_SWITCHES','10 tab switches during live exam. Threshold exceeded at switch 6.','2026-03-13 09:17:00',FALSE,NULL,NULL,NULL),
 (2003,'COPY_PASTE_ABUSE','5 paste events in first 15 minutes.','2026-03-13 09:13:00',FALSE,NULL,NULL,NULL),
 (2003,'RAPID_ANSWERING','8 answers in ~65 seconds — avg 8s/Q.','2026-03-13 09:11:00',FALSE,NULL,NULL,NULL),
 
-(2005,'MULTIPLE_LOGINS','Second session from 10.0.0.200 while exam in progress.','2026-03-13 09:16:00',FALSE,NULL,NULL,NULL),
-(2005,'HIGH_SUSPICION_SCORE','Score 90/100 — DevTools, multiple logins, IP change, rapid answers.','2026-03-13 09:23:00',FALSE,NULL,NULL,NULL),
-(2005,'IP_CHANGE_DURING_EXAM','IP changed from 10.0.0.51 to 10.0.1.10 during live exam.','2026-03-13 09:22:00',FALSE,NULL,NULL,NULL);
+(2005,'HIGH_SUSPICION_SCORE','Suspicion score 72/100 — DevTools, rapid answering, tab switches.','2026-03-13 09:23:00',FALSE,NULL,NULL,NULL);
 
 
 -- ============================================================
@@ -595,22 +609,7 @@ VALUES
 (9,  10,'2026-03-13 09:07:00',NULL,'10.0.0.51',   'FP-NIKHIL-LIN',   'tok_nikhil_live', TRUE),
 (10, 10,'2026-03-13 09:16:00',NULL,'10.0.0.200',  'FP-NIKHIL-PHONE', 'tok_nikhil_2nd2', TRUE),  -- suspicious!
 (11, 11,'2026-03-13 09:15:00',NULL,'192.168.1.106','FP-ANANYA-WIN11', 'tok_ananya_live', TRUE),
-(12, 12,'2026-03-13 09:13:00',NULL,'192.168.1.107','FP-ROHAN-WIN11',  'tok_rohan_live',  TRUE),
-(13, 4, '2026-03-13 09:00:00',NULL,'192.168.10.1', 'FP-PROCTOR-PC',   'tok_proctor_live',TRUE);
+(12, 12,'2026-03-13 09:13:00',NULL,'192.168.1.107','FP-ROHAN-WIN11',  'tok_rohan_live',  TRUE);
 
 
 SET FOREIGN_KEY_CHECKS = 1;
-
-
--- ============================================================
--- Quick sanity check
--- ============================================================
-SELECT 'Users'         AS entity, COUNT(*) AS row_count FROM Users         UNION ALL
-SELECT 'Courses',        COUNT(*) FROM Courses                         UNION ALL
-SELECT 'Exams',          COUNT(*) FROM Exams                           UNION ALL
-SELECT 'Questions',      COUNT(*) FROM Questions                       UNION ALL
-SELECT 'ExamAttempts',   COUNT(*) FROM ExamAttempts                    UNION ALL
-SELECT 'StudentAnswers', COUNT(*) FROM StudentAnswers                  UNION ALL
-SELECT 'ProctorLogs',    COUNT(*) FROM ProctorLogs                     UNION ALL
-SELECT 'SuspicionFlags', COUNT(*) FROM SuspicionFlags                  UNION ALL
-SELECT 'LoginSessions',  COUNT(*) FROM LoginSessions;

@@ -37,12 +37,24 @@
       </div>
       <div class="form-group">
         <label>Password</label>
-        <input type="password" name="password" required placeholder="Enter your password"
-               autocomplete="current-password" />
+        <div class="pw-wrap">
+          <input type="password" name="password" required placeholder="Enter your password"
+                 autocomplete="current-password" id="login-pw" />
+          <button type="button" class="pw-toggle" onclick="togglePw('login-pw',this)" tabindex="-1" aria-label="Show password">
+            <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
       </div>
       <div id="login-error" class="login-error"></div>
       <button type="submit" class="btn btn-primary btn-full"
               id="login-btn">Sign In</button>
+      <div style="text-align:center;margin-top:14px;font-size:13px;color:var(--text3)">
+        Don't have an account?
+        <a href="#" onclick="switchAuthTab('signup');return false"
+           style="color:var(--accent2);text-decoration:none;font-weight:500">Sign Up</a>
+      </div>
     </form>
 
     <!-- ── Signup form ── -->
@@ -53,33 +65,29 @@
       </div>
       <div class="form-group">
         <label>Username</label>
-        <input type="text" name="username" required placeholder="Choose a username (3–30 chars)" />
+        <input type="text" name="username" required placeholder="Choose a username (3–30 chars, letters/numbers/@_)" />
       </div>
       <div class="form-group">
         <label>Password</label>
-        <input type="password" name="password" required placeholder="Min 6 characters" />
+        <div class="pw-wrap">
+          <input type="password" name="password" required placeholder="Min 6 characters" id="signup-pw" />
+          <button type="button" class="pw-toggle" onclick="togglePw('signup-pw',this)" tabindex="-1" aria-label="Show password">
+            <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="form-group">
         <label>Role</label>
         <div class="role-grid">
           <label class="role-option">
-            <input type="radio" name="role" value="student" checked
-                   onchange="onRoleChange(this)" /> Student
+            <input type="radio" name="role" value="student" checked /> Student
           </label>
           <label class="role-option">
-            <input type="radio" name="role" value="instructor"
-                   onchange="onRoleChange(this)" /> Teacher
-          </label>
-          <label class="role-option">
-            <input type="radio" name="role" value="proctor"
-                   onchange="onRoleChange(this)" /> Proctor
+            <input type="radio" name="role" value="teacher" /> Teacher
           </label>
         </div>
-        <!-- Shown only when Teacher is selected -->
-        <label class="role-also hidden" id="also-proctor-wrap">
-          <input type="checkbox" name="also_proctor" id="also-proctor" />
-          Also act as Proctor
-        </label>
       </div>
       <div id="signup-error" class="login-error"></div>
       <button type="submit" class="btn btn-primary btn-full"
@@ -161,6 +169,7 @@
   </div>
 
   <!-- Page containers — content injected by app.js -->
+  <div class="page" id="page-classroom"></div>
   <div class="page" id="page-dashboard"></div>
   <div class="page" id="page-monitor"></div>
   <div class="page" id="page-courses"></div>

@@ -82,6 +82,26 @@ async function getUserFromToken(req) {
   return rows.length ? rows[0].user_id : null;
 }
 
+// Resolve user_id + role(s) in one call.
+// Returns { userId, role, roles[] } — all null/empty if unauthenticated.
+// `role` is the primary role from Users; `roles` includes extras from UserRoles.
+async function getUserWithRole(req) {
+  const userId = await getUserFromToken(req);
+  if (!userId) return { userId: null, role: null, roles: [] };
+  const rows = await q(`SELECT role FROM Users WHERE user_id = ?`, [userId]);
+  const primaryRole = rows[0]?.role || null;
+  const extraRows   = await q(`SELECT role FROM UserRoles WHERE user_id = ?`, [userId]);
+  const roles = [primaryRole, ...extraRows.map(r => r.role)]
+    .filter(Boolean)
+    .filter((v, i, a) => a.indexOf(v) === i);
+  return { userId, role: primaryRole, roles };
+}
+
+// True if the user's roles array includes ANY of the allowed roles.
+function hasAnyRole(roles, ...allowed) {
+  return allowed.some(r => roles.includes(r));
+}
+
 // Route wrapper — removes repeated try/catch + error logging from every handler
 const route = (method, path, fn) => app[method](path, async (req, res) => {
   try { await fn(req, res); }
@@ -101,7 +121,7 @@ route('get', '/api/dashboard', async (_req, res) => {
         (SELECT COUNT(*) FROM ExamAttempts WHERE status = 'in_progress')                AS active_attempts,
         (SELECT COUNT(*) FROM SuspicionFlags WHERE is_resolved = FALSE)                 AS open_flags,
         (SELECT COUNT(*) FROM SuspicionFlags WHERE is_resolved = FALSE
-           AND flag_type IN ('HIGH_SUSPICION_SCORE','MULTIPLE_LOGINS','IP_CHANGE_DURING_EXAM')) AS high_flags,
+           AND flag_type = 'HIGH_SUSPICION_SCORE') AS high_flags,
         (SELECT COUNT(*) FROM ExamAttempts WHERE status = 'flagged')                    AS flagged_count
     `);
 
@@ -135,7 +155,7 @@ route('get', '/api/dashboard', async (_req, res) => {
     // ─ Alerts ─
     const alertRows = await q(`
       SELECT u.full_name, ea.suspicion_score, ea.tab_switches, ea.copy_paste_attempts,
-             ea.face_not_detected, ea.status, ea.score, ex.total_marks, ea.attempt_id
+             ea.status, ea.score, ex.total_marks, ea.attempt_id
       FROM ExamAttempts ea
       JOIN Users u  ON ea.student_id = u.user_id
       JOIN Exams ex ON ea.exam_id    = ex.exam_id
@@ -151,14 +171,13 @@ route('get', '/api/dashboard', async (_req, res) => {
         const parts = [];
         if (r.tab_switches > 0)          parts.push(`${r.tab_switches} tab switches`);
         if (r.copy_paste_attempts > 0)   parts.push(`${r.copy_paste_attempts} copy-paste events`);
-        if (r.face_not_detected > 0)     parts.push(`face not detected ${r.face_not_detected}×`);
         if (sc >= 70)                    parts.push(`suspicion score ${sc}/100`);
-        msg = parts.join('. ') + `. Score ${r.score}/${r.total_marks}.`;
+        msg = parts.join('. ') + `. Score ${r.score ?? '—'}/${r.total_marks}.`;
       } else if (r.status === 'timed_out') {
-        msg = `Face not detected ${r.face_not_detected} times. Exam auto-submitted at time limit.`;
+        msg = `Exam auto-submitted at time limit. Score: ${r.score ?? '—'}/${r.total_marks}.`;
       } else {
-        const pct = Math.round((r.score / r.total_marks) * 100);
-        msg = `Exam completed cleanly. Score ${r.score}/${r.total_marks} (${pct}%). No suspicious events.`;
+        const pct = r.score != null ? Math.round((r.score / r.total_marks) * 100) : 0;
+        msg = `Exam completed cleanly. Score ${r.score ?? '—'}/${r.total_marks} (${pct}%). No suspicious events.`;
       }
       return {
         type, name: r.full_name, msg,
@@ -172,18 +191,18 @@ route('get', '/api/dashboard', async (_req, res) => {
     const refId = await refExamId();
     const [fRows] = await pool.query(`
       SELECT
-        COUNT(DISTINCT enr.student_id)                            AS enrolled,
-        COUNT(DISTINCT ea.student_id)                             AS started,
-        SUM(ea.status IN ('submitted','graded','flagged'))         AS submitted,
-        SUM(ea.status = 'timed_out')                              AS timed_out,
-        SUM(ea.status = 'flagged')                                AS flagged,
-        SUM(ea.score >= ex.passing_marks)                         AS passed,
-        ex.passing_marks
+        COUNT(DISTINCT enr.student_id)                                                AS enrolled,
+        COUNT(DISTINCT CASE WHEN ea.attempt_id IS NOT NULL THEN ea.student_id END)    AS started,
+        COUNT(DISTINCT CASE WHEN ea.status IN ('submitted','graded','flagged') THEN ea.student_id END) AS submitted,
+        COUNT(DISTINCT CASE WHEN ea.status = 'timed_out'  THEN ea.student_id END)    AS timed_out,
+        COUNT(DISTINCT CASE WHEN ea.status = 'flagged'    THEN ea.student_id END)    AS flagged,
+        COUNT(DISTINCT CASE WHEN ea.score >= ex.passing_marks THEN ea.student_id END) AS passed,
+        ex.passing_marks, ex.title AS exam_title
       FROM Exams ex
       JOIN Enrollments enr ON ex.course_id = enr.course_id AND enr.status = 'active'
       LEFT JOIN ExamAttempts ea ON ex.exam_id = ea.exam_id
       WHERE ex.exam_id = ?
-      GROUP BY ex.exam_id, ex.passing_marks`, [refId]
+      GROUP BY ex.exam_id, ex.passing_marks, ex.title`, [refId]
     );
     const f = fRows[0] || { enrolled: 0, started: 0, submitted: 0, timed_out: 0, flagged: 0, passed: 0, passing_marks: 0 };
 
@@ -246,7 +265,7 @@ route('get', '/api/dashboard', async (_req, res) => {
       ],
     };
 
-    res.json({ stats, alerts, funnel, scoreChart });
+    res.json({ stats, alerts, funnel, scoreChart, examTitle: f.exam_title || 'Overview' });
 });
 
 // ── GET /api/monitor/stream  (Server-Sent Events) ─────────────
@@ -271,7 +290,7 @@ app.get('/api/monitor/stream', async (req, res) => {
 
       const rows = await q(`
         SELECT ea.attempt_id, u.full_name, ea.status, ea.suspicion_score,
-               ea.tab_switches, ea.copy_paste_attempts, ea.face_not_detected,
+               ea.tab_switches, ea.copy_paste_attempts,
                ea.fullscreen_exits, ea.started_at, ea.ip_address,
                (SELECT COUNT(*) FROM StudentAnswers sa WHERE sa.attempt_id = ea.attempt_id) AS answered,
                (SELECT COUNT(*) FROM Questions qu WHERE qu.exam_id = ea.exam_id)            AS total_q,
@@ -297,7 +316,6 @@ app.get('/api/monitor/stream', async (req, res) => {
         const indicators = [];
         if (r.tab_switches > 0)        indicators.push({ cls: 'ind-tab',   text: `Tab Switch ×${r.tab_switches}` });
         if (r.copy_paste_attempts > 0) indicators.push({ cls: 'ind-paste', text: `Paste ×${r.copy_paste_attempts}` });
-        if (r.face_not_detected > 0)   indicators.push({ cls: 'ind-face',  text: `Face N/D ×${r.face_not_detected}` });
         if (r.fullscreen_exits > 0)    indicators.push({ cls: '', text: `Fullscreen Exit ×${r.fullscreen_exits}`, style: 'background:rgba(100,116,139,0.15);color:var(--text3)' });
         if (indicators.length === 0)   indicators.push({ cls: 'ind-clean', text: 'Clean' });
 
@@ -340,32 +358,75 @@ app.get('/api/monitor/stream', async (req, res) => {
   req.on('close', () => clearInterval(interval));
 });
 
+// ── GET /api/monitor/exam/:id — snapshot for classroom live list ─
+route('get', '/api/monitor/exam/:id', async (req, res) => {
+  const examId = parseInt(req.params.id);
+  const rows = await q(
+    `SELECT u.full_name AS name, ea.status, ea.suspicion_score AS suspicion,
+            ea.tab_switches AS tabs, ea.copy_paste_attempts AS paste,
+            ea.fullscreen_exits AS fullscreen, ea.ip_address
+     FROM   ExamAttempts ea
+     JOIN   Users u ON ea.student_id = u.user_id
+     WHERE  ea.exam_id = ?
+     ORDER  BY ea.suspicion_score DESC, ea.attempt_id`, [examId]
+  );
+  res.json({ students: rows });
+});
+
 // ── GET /api/flagged ──────────────────────────────────────────
-route('get', '/api/flagged', async (_req, res) => {
+route('get', '/api/flagged', async (req, res) => {
+    const { roles } = await getUserWithRole(req);
+    if (!hasAnyRole(roles, 'admin', 'teacher'))
+      return res.status(403).json({ error: 'Teacher or admin access required' });
+    // Teacher can choose sort order via ?sort= query param
+    const SORT_MAP = {
+      suspicion:  'ea.suspicion_score DESC',
+      tabs:       'ea.tab_switches DESC',
+      paste:      'ea.copy_paste_attempts DESC',
+      fullscreen: 'ea.fullscreen_exits DESC',
+      rapid:      'rapid_avg_secs ASC',
+      composite:  'composite_risk DESC',
+    };
+    const sortKey     = req.query.sort || 'suspicion';
+    const orderClause = SORT_MAP[sortKey] || SORT_MAP.suspicion;
+
     const rows = await q(`
       SELECT ea.attempt_id, u.full_name, u.email, ea.status, ea.suspicion_score,
-             ea.tab_switches, ea.copy_paste_attempts, ea.face_not_detected,
+             ea.tab_switches, ea.copy_paste_attempts, ea.fullscreen_exits,
+             ea.ip_address,
              ea.score, ex.total_marks, ex.passing_marks, ex.title AS exam_title,
              (SELECT COUNT(*) FROM SuspicionFlags sf
-              WHERE sf.attempt_id = ea.attempt_id AND sf.is_resolved = FALSE) AS open_flags
+              WHERE sf.attempt_id = ea.attempt_id AND sf.is_resolved = FALSE) AS open_flags,
+             -- Rapid answering: avg seconds per question for this attempt
+             (SELECT ROUND(AVG(sa.time_taken_seconds), 1)
+              FROM StudentAnswers sa WHERE sa.attempt_id = ea.attempt_id) AS rapid_avg_secs,
+             -- Multiple login: how many concurrent IPs were seen during this attempt
+             (SELECT COUNT(DISTINCT ls.ip_address)
+              FROM LoginSessions ls
+              WHERE ls.user_id = ea.student_id
+                AND ls.login_time <= COALESCE(ea.submitted_at, NOW())
+                AND (ls.logout_time IS NULL OR ls.logout_time >= ea.started_at)) AS login_ip_count,
+             -- Composite risk score (mirrors Q02)
+             (ea.suspicion_score * 1.0 + ea.tab_switches * 3 + ea.copy_paste_attempts * 5) AS composite_risk
       FROM ExamAttempts ea
       JOIN Users u  ON ea.student_id = u.user_id
       JOIN Exams ex ON ea.exam_id    = ex.exam_id
       WHERE (ea.status IN ('flagged','timed_out') OR ea.suspicion_score >= 5)
-      ORDER BY ea.suspicion_score DESC`
+      ORDER BY ${orderClause}`
     );
 
     const attempts = rows.map(r => {
-      const sc       = r.suspicion_score;
-      const passed   = r.score >= r.passing_marks;
-      const scColor  = suspColor(sc);
+      const sc     = r.suspicion_score;
+      const passed = r.score != null && r.score >= r.passing_marks;
 
-      const tabColor   = r.tab_switches >= 8       ? 'var(--red)' : r.tab_switches >= 3   ? 'var(--yellow)' : 'var(--text3)';
-      const pasteColor = r.copy_paste_attempts >= 3 ? 'var(--red)' : r.copy_paste_attempts > 0 ? 'var(--yellow)' : 'var(--text3)';
-      const faceColor  = r.face_not_detected >= 3   ? 'var(--orange)' : r.face_not_detected > 0 ? 'var(--yellow)' : 'var(--text3)';
+      const tabColor      = r.tab_switches >= 8         ? 'var(--red)'    : r.tab_switches >= 3       ? 'var(--yellow)' : 'var(--text3)';
+      const pasteColor    = r.copy_paste_attempts >= 3   ? 'var(--red)'    : r.copy_paste_attempts > 0 ? 'var(--yellow)' : 'var(--text3)';
+      const fullscreenColor = r.fullscreen_exits >= 3    ? 'var(--orange)' : r.fullscreen_exits > 0    ? 'var(--yellow)' : 'var(--text3)';
+      const rapidColor    = r.rapid_avg_secs !== null && r.rapid_avg_secs < 15 ? 'var(--red)' : r.rapid_avg_secs < 30 ? 'var(--yellow)' : 'var(--text3)';
+      const multiLoginColor = r.login_ip_count > 1      ? 'var(--red)'    : 'var(--text3)';
 
       const statusBadge = r.status === 'flagged' ? 'badge-red' : r.status === 'timed_out' ? 'badge-yellow' : 'badge-green';
-      const statusText  = r.status === 'flagged' ? 'Flagged' : r.status === 'timed_out' ? 'Timed Out' : 'Submitted';
+      const statusText  = r.status === 'flagged' ? 'Flagged'   : r.status === 'timed_out' ? 'Timed Out'   : 'Submitted';
       const scoreText   = r.status === 'flagged' ? 'Under Review' : passed ? 'Pass' : 'Fail';
       const scoreBadge  = r.status === 'flagged' ? 'badge-yellow' : passed ? 'badge-green' : 'badge-red';
 
@@ -375,10 +436,13 @@ route('get', '/api/flagged', async (_req, res) => {
         attemptId: r.attempt_id,
         isLive: r.status === 'in_progress' || r.status === 'flagged',
         statusBadge, statusText,
-        suspicion: sc, suspColor: scColor,
-        tabs: r.tab_switches, tabColor,
-        paste: r.copy_paste_attempts, pasteColor,
-        face: r.face_not_detected, faceColor,
+        suspicion: sc, suspColor: suspColor(sc),
+        tabs:        r.tab_switches,        tabColor,
+        paste:       r.copy_paste_attempts, pasteColor,
+        fullscreen:  r.fullscreen_exits,    fullscreenColor,
+        rapidAvg:    r.rapid_avg_secs !== null ? `${r.rapid_avg_secs}s` : '—', rapidColor,
+        multiLogin:  r.login_ip_count > 1 ? `${r.login_ip_count} IPs` : '—', multiLoginColor,
+        ipAddress:   r.ip_address,
         score: `${r.score ?? '—'}/${r.total_marks}`, scoreBadge, scoreText,
         openFlags: `${r.open_flags ?? 0} open`,
         flagBadge: (r.open_flags ?? 0) > 0 ? 'badge-red' : 'badge-gray',
@@ -421,8 +485,22 @@ route('get', '/api/flagged', async (_req, res) => {
 });
 
 // ── GET /api/logs ─────────────────────────────────────────────
-route('get', '/api/logs', async (_req, res) => {
-    // Pick the highest-suspicion attempt for the log viewer
+route('get', '/api/logs', async (req, res) => {
+    const { roles } = await getUserWithRole(req);
+    if (!hasAnyRole(roles, 'admin', 'teacher'))
+      return res.status(403).json({ error: 'Teacher or admin access required' });
+    // All attempts list for the selector (sorted by suspicion desc)
+    const allAttempts = await q(`
+      SELECT ea.attempt_id, u.full_name, ex.title AS exam_title,
+             ea.suspicion_score, ea.status
+      FROM ExamAttempts ea
+      JOIN Users u  ON ea.student_id = u.user_id
+      JOIN Exams ex ON ea.exam_id    = ex.exam_id
+      ORDER BY ea.suspicion_score DESC, ea.attempt_id`
+    );
+
+    // Pick the attempt to show: ?attempt_id=N or fallback to highest suspicion
+    const requestedId = parseInt(req.query.attempt_id) || null;
     const [attemptRows] = await pool.query(`
       SELECT ea.attempt_id, u.full_name, ea.suspicion_score,
              ea.tab_switches, ea.copy_paste_attempts,
@@ -431,13 +509,21 @@ route('get', '/api/logs', async (_req, res) => {
       FROM ExamAttempts ea
       JOIN Users u  ON ea.student_id = u.user_id
       JOIN Exams ex ON ea.exam_id    = ex.exam_id
-      ORDER BY ea.suspicion_score DESC LIMIT 1`
+      ${requestedId ? 'WHERE ea.attempt_id = ?' : 'ORDER BY ea.suspicion_score DESC LIMIT 1'}`,
+      requestedId ? [requestedId] : []
     );
     const attempt = attemptRows[0];
 
     if (!attempt) {
       return res.json({
-        badge: 'No attempt data — load sample data first',
+        badge: 'No attempt data',
+        attemptId: null,
+        allAttempts: allAttempts.map(a => ({
+          attempt_id: a.attempt_id,
+          label:      `${a.full_name} — ${a.exam_title} (suspicion: ${a.suspicion_score})`,
+          suspicion:  a.suspicion_score,
+          status:     a.status,
+        })),
         timeline: [],
         risk: { score: 0, totalEvents: 0, duration: '—', metrics: [] },
       });
@@ -457,9 +543,9 @@ route('get', '/api/logs', async (_req, res) => {
     const dotMap  = { CRITICAL: 'high', HIGH: 'high', MEDIUM: 'medium', LOW: 'info', INFO: 'info' };
     const iconMap = {
       EXAM_STARTED: '>', TAB_SWITCH: '<>', COPY_PASTE_DETECTED: 'CP',
-      FULLSCREEN_EXIT: 'FS', FACE_NOT_DETECTED: 'ND', DEVTOOLS_OPENED: 'DT',
-      IP_ADDRESS_CHANGED: 'IP', RAPID_ANSWERING: 'RQ', EXAM_SUBMITTED: 'OK',
-      MULTIPLE_LOGIN_DETECTED: '!!', AUTO_SUBMITTED: 'TO',
+      FULLSCREEN_EXIT: 'FS', DEVTOOLS_OPENED: 'DT', RAPID_ANSWERING: 'RQ',
+      RIGHT_CLICK_ATTEMPT: 'RC', EXAM_SUBMITTED: 'OK', AUTO_SUBMITTED: 'TO',
+      IDLE_WARNING: 'W!', PROCTOR_KICK: 'KK',
     };
 
     // Number repeated event types (e.g. TAB_SWITCH #1, #2 …)
@@ -467,8 +553,9 @@ route('get', '/api/logs', async (_req, res) => {
     const timeline = events.map(e => {
       typeCount[e.event_type] = (typeCount[e.event_type] || 0) + 1;
       const n     = typeCount[e.event_type];
-      const multi = ['TAB_SWITCH', 'COPY_PASTE_DETECTED', 'FACE_NOT_DETECTED'].includes(e.event_type);
+      const multi = ['TAB_SWITCH', 'COPY_PASTE_DETECTED'].includes(e.event_type);
       return {
+        type:   e.event_type,
         dot:    dotMap[e.severity] || 'info',
         icon:   iconMap[e.event_type] || '•',
         title:  multi ? `${e.event_type} #${n}` : e.event_type,
@@ -478,7 +565,14 @@ route('get', '/api/logs', async (_req, res) => {
     });
 
     res.json({
-      badge:    `${attempt.full_name} — Attempt #${attempt.attempt_id} (Q09 Query)`,
+      badge:       `${attempt.full_name} — Attempt #${attempt.attempt_id}`,
+      attemptId:   attempt.attempt_id,
+      allAttempts: allAttempts.map(a => ({
+        attempt_id:    a.attempt_id,
+        label:         `${a.full_name} — ${a.exam_title} (suspicion: ${a.suspicion_score})`,
+        suspicion:     a.suspicion_score,
+        status:        a.status,
+      })),
       timeline,
       risk: {
         score:       attempt.suspicion_score,
@@ -495,28 +589,33 @@ route('get', '/api/logs', async (_req, res) => {
 });
 
 // ── GET /api/student-view ─────────────────────────────────────
-// Optional ?student_id=N to show a specific student's view.
+// Students always see their own view via session token.
+// Admins/proctors/instructors may pass ?student_id=N.
 route('get', '/api/student-view', async (req, res) => {
-    let student;
-    if (req.query.student_id) {
-      const [[s]] = await pool.query(
-        `SELECT user_id, full_name, email FROM Users WHERE user_id = ? AND role = 'student'`,
-        [req.query.student_id]
-      );
-      student = s;
+    const { userId: tokenUserId, role: tokenRole } = await getUserWithRole(req);
+
+    let targetId;
+    if (tokenRole === 'student') {
+      targetId = tokenUserId;
+    } else if (req.query.student_id) {
+      targetId = parseInt(req.query.student_id);
+    } else {
+      const [[first]] = await pool.query(`SELECT user_id FROM Users WHERE role = 'student' ORDER BY user_id LIMIT 1`);
+      targetId = first?.user_id;
     }
-    if (!student) {
-      const [[s]] = await pool.query(
-        `SELECT user_id, full_name, email FROM Users WHERE role = 'student' ORDER BY user_id LIMIT 1`
-      );
-      student = s;
-    }
+
+    const [[student]] = await pool.query(
+      `SELECT user_id, full_name, email FROM Users WHERE user_id = ? AND role = 'student'`,
+      [targetId]
+    );
+    if (!student) return res.json({ label: 'No student found', exams: [] });
 
     const exams = await q(`
       SELECT e.exam_id, e.title, c.course_code, c.course_name,
              e.total_marks, e.duration_minutes, e.window_start, e.window_end,
              e.passing_marks, e.max_attempts, e.is_published,
-             ea.status, ea.score, ea.percentage, ea.attempt_id
+             ea.status, ea.score, ea.percentage, ea.attempt_id,
+             (SELECT COUNT(*) FROM Questions q WHERE q.exam_id = e.exam_id) AS question_count
       FROM Enrollments enr
       JOIN Courses c ON enr.course_id = c.course_id
       JOIN Exams   e ON c.course_id   = e.course_id AND e.is_published = TRUE
@@ -553,7 +652,7 @@ route('get', '/api/student-view', async (req, res) => {
         title: e.title, course: `${e.course_code} · ${e.course_name}`,
         statusBadge, statusText,
         marks: e.total_marks, duration: `${e.duration_minutes} min`,
-        questions: `${e.max_attempts} Attempt${e.max_attempts > 1 ? 's' : ''}`,
+        questions: `${e.question_count} Q · ${e.max_attempts} attempt${e.max_attempts > 1 ? 's' : ''}`,
         action,
       };
 
@@ -571,47 +670,89 @@ route('get', '/api/student-view', async (req, res) => {
 });
 
 // ── GET /api/analytics ────────────────────────────────────────
-route('get', '/api/analytics', async (_req, res) => {
-    const aExamId = await refExamId();
+route('get', '/api/analytics', async (req, res) => {
+    const { userId, role } = await getUserWithRole(req);
+    if (role === 'student')
+      return res.status(403).json({ error: 'Students do not have access to analytics' });
+    const isTeacher = role === 'teacher';
+    const instrSql    = isTeacher ? 'AND e.created_by = ?' : '';
+    const instrParams = isTeacher ? [userId] : [];
 
-    // Summary (Q03/Q08 combined)
-    const [[s]] = await pool.query(`
-      SELECT COUNT(*) AS total,
-             SUM(ea.score >= ex.passing_marks)   AS passed,
-             ROUND(AVG(ea.percentage), 1)        AS avg_pct,
-             ROUND(AVG(ea.suspicion_score), 1)   AS avg_susp,
-             ex.title AS exam_title
-      FROM ExamAttempts ea
-      JOIN Exams ex ON ea.exam_id = ex.exam_id
-      WHERE ea.exam_id = ? AND ea.status IN ('submitted','graded','flagged')
-      GROUP BY ex.title`, [aExamId]
+    // All published exams for the dropdown (instructor-scoped)
+    const allExams = await q(
+      `SELECT exam_id, title FROM Exams e WHERE is_published = TRUE ${instrSql} ORDER BY exam_id`,
+      instrParams
     );
 
-    const [[ev]] = await pool.query(`
-      SELECT COUNT(*) AS total_events FROM ProctorLogs pl
-      JOIN ExamAttempts ea ON pl.attempt_id = ea.attempt_id WHERE ea.exam_id = ?`, [aExamId]
-    );
+    const examIdParam = parseInt(req.query.exam_id) || null;
+    const overall     = !examIdParam;
 
-    const passRate = s?.total > 0 ? Math.round((s.passed / s.total) * 100) : 0;
+    // Summary stats — instructor-scoped if applicable
+    let s, ev;
+    if (overall) {
+      const sWhere = (role === 'teacher') ? 'AND ex.created_by = ?' : '';
+      [[s]] = await pool.query(`
+        SELECT COUNT(*) AS total,
+               SUM(ea.score >= ex.passing_marks)  AS passed,
+               ROUND(AVG(ea.percentage), 1)        AS avg_pct,
+               ROUND(AVG(ea.suspicion_score), 1)   AS avg_susp,
+               'All Exams'                          AS exam_title
+        FROM ExamAttempts ea
+        JOIN Exams ex ON ea.exam_id = ex.exam_id
+        WHERE ea.status IN ('submitted','graded','flagged') ${sWhere}`,
+        instrParams);
+      [[ev]] = await pool.query(
+        `SELECT COUNT(*) AS total_events FROM ProctorLogs pl
+         JOIN ExamAttempts ea ON pl.attempt_id = ea.attempt_id
+         JOIN Exams ex ON ea.exam_id = ex.exam_id WHERE 1=1 ${sWhere}`,
+        instrParams);
+    } else {
+      [[s]] = await pool.query(`
+        SELECT COUNT(*) AS total,
+               SUM(ea.score >= ex.passing_marks)  AS passed,
+               ROUND(AVG(ea.percentage), 1)        AS avg_pct,
+               ROUND(AVG(ea.suspicion_score), 1)   AS avg_susp,
+               ex.title                            AS exam_title
+        FROM ExamAttempts ea
+        JOIN Exams ex ON ea.exam_id = ex.exam_id
+        WHERE ea.exam_id = ? AND ea.status IN ('submitted','graded','flagged')
+        GROUP BY ex.title`, [examIdParam]);
+      [[ev]] = await pool.query(`
+        SELECT COUNT(*) AS total_events FROM ProctorLogs pl
+        JOIN ExamAttempts ea ON pl.attempt_id = ea.attempt_id
+        WHERE ea.exam_id = ?`, [examIdParam]);
+    }
+
+    const passRate  = s?.total > 0 ? Math.round((s.passed / s.total) * 100) : 0;
     const examLabel = s?.exam_title || 'Exam';
     const stats = [
       { color: 'green',  label: 'Pass Rate',    value: `${passRate}%`, valueColor: 'var(--green)',  sub: `${s?.passed ?? 0} of ${s?.total ?? 0} submitted · ${examLabel}` },
       { color: 'purple', label: 'Avg Score',    value: s?.avg_pct ?? 0,                              sub: `Class average · ${examLabel}` },
-      { color: 'yellow', label: 'Avg Suspicion',value: s?.avg_susp ?? 0, valueColor: 'var(--yellow)',sub: `per attempt · ${examLabel}` },
+      { color: 'yellow', label: 'Avg Suspicion', value: s?.avg_susp ?? 0, valueColor: 'var(--yellow)', sub: `per attempt · ${examLabel}` },
       { color: 'red',    label: 'Total Events', value: ev?.total_events ?? 0,                        sub: 'Proctoring events logged' },
     ];
 
-    // Question difficulty (Q04)
-    const dRows = await q(`
-      SELECT q.question_id, LEFT(q.question_text, 50) AS topic,
-             ROUND(AVG(sa.time_taken_seconds), 0)                                       AS avg_time,
-             ROUND(100.0 * SUM(sa.is_correct) / NULLIF(COUNT(sa.answer_id), 0), 0)     AS correct_pct
-      FROM Questions q
-      LEFT JOIN StudentAnswers sa ON q.question_id = sa.question_id
-      WHERE q.exam_id = ?
-      GROUP BY q.question_id, q.question_text
-      ORDER BY correct_pct ASC LIMIT 5`, [aExamId]
-    );
+    // Question difficulty (Q04) — all questions for specific exam, top 10 hardest overall
+    const dInstrSql = (role === 'teacher') ? 'JOIN Exams e ON q.exam_id = e.exam_id AND e.created_by = ?' : '';
+    const dRows = overall
+      ? await q(`
+          SELECT q.question_id, LEFT(q.question_text, 50) AS topic,
+                 ROUND(AVG(sa.time_taken_seconds), 0)                                  AS avg_time,
+                 ROUND(100.0 * SUM(sa.is_correct) / NULLIF(COUNT(sa.answer_id), 0), 0) AS correct_pct
+          FROM Questions q
+          ${dInstrSql}
+          LEFT JOIN StudentAnswers sa ON q.question_id = sa.question_id
+          GROUP BY q.question_id, q.question_text
+          ORDER BY correct_pct ASC LIMIT 10`, instrParams)
+      : await q(`
+          SELECT q.question_id, LEFT(q.question_text, 50) AS topic,
+                 ROUND(AVG(sa.time_taken_seconds), 0)                                  AS avg_time,
+                 ROUND(100.0 * SUM(sa.is_correct) / NULLIF(COUNT(sa.answer_id), 0), 0) AS correct_pct
+          FROM Questions q
+          LEFT JOIN StudentAnswers sa ON q.question_id = sa.question_id
+          WHERE q.exam_id = ?
+          GROUP BY q.question_id, q.question_text
+          ORDER BY correct_pct ASC`, [examIdParam]);
 
     const difficulty = dRows.map(r => {
       const p      = r.correct_pct ?? 0;
@@ -621,39 +762,50 @@ route('get', '/api/analytics', async (_req, res) => {
       return { q: `Q${r.question_id}`, topic: r.topic, pct: `${p}%`, pctColor: color, time: `${r.avg_time ?? '?'}s`, badge, rating };
     });
 
-    // Class ranking (Q10)
+    // Class ranking (Q10) — scoped to selected exam or overall, instructor-filtered
+    const rWhere = overall
+      ? `WHERE ea.status IN ('submitted','graded','flagged')${isTeacher ? ' AND ex.created_by = ?' : ''}`
+      : `WHERE ea.exam_id = ? AND ea.status IN ('submitted','graded','flagged')`;
+    const rParams = overall ? instrParams : [examIdParam];
     const rRows = await q(`
-      SELECT u.full_name, ROUND(AVG(ea.percentage), 1) AS avg_pct,
-             SUM(ea.score >= ex.passing_marks)         AS passed,
-             ROUND(AVG(ea.suspicion_score), 1)         AS avg_susp,
-             SUM(ea.status = 'flagged')                AS flagged,
-             RANK() OVER (ORDER BY AVG(ea.percentage) DESC) AS class_rank
-      FROM ExamAttempts ea
-      JOIN Users u  ON ea.student_id = u.user_id
-      JOIN Exams ex ON ea.exam_id    = ex.exam_id
-      WHERE ex.course_id = 1 AND ea.status IN ('submitted','graded','flagged')
-      GROUP BY u.user_id, u.full_name
-      ORDER BY avg_pct DESC`
-    );
+          SELECT u.full_name, ROUND(AVG(ea.percentage), 1)          AS avg_pct,
+                 SUM(ea.score >= ex.passing_marks)                   AS passed,
+                 ROUND(AVG(ea.suspicion_score), 1)                   AS avg_susp,
+                 SUM(ea.status = 'flagged')                          AS flagged,
+                 RANK() OVER (ORDER BY AVG(ea.percentage) DESC)      AS class_rank
+          FROM ExamAttempts ea
+          JOIN Users u  ON ea.student_id = u.user_id
+          JOIN Exams ex ON ea.exam_id    = ex.exam_id
+          ${rWhere}
+          GROUP BY u.user_id, u.full_name
+          ORDER BY avg_pct DESC`, rParams);
 
     const ranking = rRows.map(r => {
-      const p  = r.avg_pct;
-      const sc = r.avg_susp;
+      const p  = r.avg_pct ?? 0;
+      const sc = r.avg_susp ?? 0;
+      const pctColor = p >= 75 ? 'var(--green)' : p >= 50 ? 'var(--yellow)' : 'var(--red)';
       return {
-        rank: `#${r.class_rank}`, name: r.full_name, flag: r.flagged > 0,
-        pct: `${p}%`, pctColor: p >= 75 ? 'var(--green)' : p >= 50 ? 'var(--yellow)' : 'var(--red)',
-        passBadge: r.passed > 0 ? 'badge-green' : r.flagged > 0 ? 'badge-yellow' : 'badge-red',
-        passText:  r.passed > 0 ? '✓' : r.flagged > 0 ? '?' : '✗',
+        rank:       r.class_rank,          // numeric; component prepends '#'
+        name:       r.full_name,
+        avgPct:     `${p}%`,
+        avgScore:   `${p}%`,               // same value — component shows this as secondary
+        examsPassed: r.passed > 0 ? `${r.passed} passed` : r.flagged > 0 ? 'Flagged' : 'Fail',
+        pctColor,
+        flag:       r.flagged > 0,
+        passBadge:  r.passed > 0 ? 'badge-green' : r.flagged > 0 ? 'badge-yellow' : 'badge-red',
+        passText:   r.passed > 0 ? 'Pass' : r.flagged > 0 ? '?' : 'Fail',
         susp: sc, suspColor: suspColor(sc),
       };
     });
 
-    res.json({ stats, difficulty, ranking });
+    res.json({ exams: allExams, selectedExam: examIdParam, stats, difficulty, ranking });
 });
 
 // ── GET /api/schema ───────────────────────────────────────────
 // Reads live metadata from INFORMATION_SCHEMA — truly DBMS-driven!
-route('get', '/api/schema', async (_req, res) => {
+route('get', '/api/schema', async (req, res) => {
+    const { userId } = await getUserWithRole(req);
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
     // Table list with real row counts
     const tableOrder = ['Users','Courses','Enrollments','Exams','Questions',
                         'ExamAttempts','StudentAnswers','ProctorLogs','SuspicionFlags','LoginSessions'];
@@ -749,44 +901,154 @@ route('get', '/api/schema', async (_req, res) => {
 });
 
 // ── GET /api/results ──────────────────────────────────────────
-route('get', '/api/results', async (_req, res) => {
-    const [resultRows] = await pool.query(`
-      SELECT u.full_name, ea.score, ea.percentage, ex.total_marks, ex.passing_marks,
+// Returns student results grouped by exam. Instructors see their exams only;
+// students see only their own attempts. Admin sees all.
+route('get', '/api/results', async (req, res) => {
+    const { userId, role } = await getUserWithRole(req);
+
+    let whereExtra = '';
+    const whereParams = [];
+    if (role === 'teacher') {
+      whereExtra = 'AND ex.created_by = ?';
+      whereParams.push(userId);
+    } else if (role === 'student') {
+      whereExtra = 'AND ea.student_id = ?';
+      whereParams.push(userId);
+    }
+
+    const rows = await q(`
+      SELECT ea.attempt_id, u.full_name, ex.exam_id, ex.title AS exam_title,
+             ea.score, ea.percentage, ex.total_marks, ex.passing_marks, ea.status,
              TIMESTAMPDIFF(MINUTE, ea.started_at, ea.submitted_at) AS duration_min
       FROM ExamAttempts ea
       JOIN Users u  ON ea.student_id = u.user_id
       JOIN Exams ex ON ea.exam_id    = ex.exam_id
-      WHERE ea.status IN ('submitted','graded') AND ea.score >= ex.passing_marks
-      ORDER BY ea.percentage DESC LIMIT 1`
+      WHERE ea.status IN ('submitted','graded','flagged','timed_out') ${whereExtra}
+      ORDER BY ex.exam_id ASC, ea.percentage IS NULL ASC, ea.percentage DESC`,
+      whereParams
     );
-    const row = resultRows[0];
 
-    if (!row) {
-      return res.json({
-        student: 'No data — load sample data first',
-        metrics: [{ label: 'Status', value: 'No results yet', color: 'var(--text3)' }],
-        note: 'Run setup.bat to load sample data, then restart the server.',
+    // Group by exam
+    const examMap = {};
+    for (const r of rows) {
+      if (!examMap[r.exam_id]) examMap[r.exam_id] = { exam_id: r.exam_id, title: r.exam_title, students: [] };
+      const passed = r.score != null && r.score >= r.passing_marks;
+      examMap[r.exam_id].students.push({
+        name:       r.full_name,
+        score:      r.score != null ? `${r.score}/${r.total_marks}` : `—/${r.total_marks}`,
+        percentage: r.percentage != null ? `${r.percentage}%` : '—',
+        result:     r.status === 'flagged' ? 'Under Review'
+                  : r.status === 'timed_out' ? 'Timed Out'
+                  : passed ? 'PASS' : 'FAIL',
+        resultColor: r.status === 'flagged' ? 'var(--yellow)'
+                   : r.status === 'timed_out' ? 'var(--orange)'
+                   : passed ? 'var(--green)' : 'var(--red)',
+        duration:   r.duration_min != null ? `${r.duration_min} min` : '—',
+        attempt_id: r.attempt_id,
       });
     }
 
-    res.json({
-      student: row.full_name,
-      metrics: [
-        { label: 'Score',      value: `${row.score}/${row.total_marks}`, color: 'var(--green)' },
-        { label: 'Percentage', value: `${row.percentage}%`,              color: 'var(--green)' },
-        { label: 'Result',     value: 'PASS',                            color: 'var(--green)' },
-        { label: 'Duration',   value: `${row.duration_min} min`,         color: null           },
-      ],
-      note: 'Detailed per-question results returned by sp_get_exam_results (stored procedure).',
-    });
+    // Overall class ranking — instructor-scoped if applicable
+    let rankWhere = `WHERE ea.status IN ('submitted','graded','flagged')`;
+    const rankParams = [];
+    if (role === 'teacher') {
+      rankWhere += ' AND ex.created_by = ?';
+      rankParams.push(userId);
+    }
+    const rankRows = await q(`
+      SELECT u.full_name,
+             ROUND(AVG(ea.percentage), 1)                           AS avg_pct,
+             ROUND(AVG(ea.score), 1)                                AS avg_score,
+             SUM(ea.score >= ex.passing_marks)                      AS exams_passed,
+             COUNT(ea.attempt_id)                                   AS exams_taken,
+             RANK() OVER (ORDER BY AVG(ea.percentage) DESC)         AS class_rank
+      FROM ExamAttempts ea
+      JOIN Users u  ON ea.student_id = u.user_id
+      JOIN Exams ex ON ea.exam_id    = ex.exam_id
+      ${rankWhere}
+      GROUP BY u.user_id, u.full_name
+      ORDER BY avg_pct DESC`,
+      rankParams
+    );
+
+    const ranking = rankRows.map(r => ({
+      rank:        r.class_rank,
+      name:        r.full_name,
+      avgScore:    r.avg_score != null ? String(r.avg_score) : '—',
+      avgPct:      r.avg_pct  != null ? `${r.avg_pct}%` : '—',
+      pctColor:    r.avg_pct >= 75 ? 'var(--green)' : r.avg_pct >= 50 ? 'var(--yellow)' : 'var(--red)',
+      examsPassed: `${r.exams_passed} / ${r.exams_taken}`,
+    }));
+
+    res.json({ exams: Object.values(examMap), ranking });
+});
+
+// ── GET /api/results/:attempt_id ──────────────────────────────
+// Per-student detail: every question, what they answered, correct answer, marks.
+route('get', '/api/results/:attempt_id', async (req, res) => {
+  const attempt_id = parseInt(req.params.attempt_id);
+
+  const [[attempt]] = await pool.execute(`
+    SELECT u.full_name, ex.title AS exam_title, ex.total_marks, ex.passing_marks,
+           ea.score, ea.percentage, ea.status,
+           TIMESTAMPDIFF(MINUTE, ea.started_at, ea.submitted_at) AS duration_min
+    FROM ExamAttempts ea
+    JOIN Users u  ON ea.student_id = u.user_id
+    JOIN Exams ex ON ea.exam_id    = ex.exam_id
+    WHERE ea.attempt_id = ?`, [attempt_id]);
+
+  if (!attempt) return res.status(404).json({ error: 'Attempt not found' });
+
+  const questions = await q(`
+    SELECT q.question_id, q.question_text, q.marks,
+           sa.selected_option, sa.is_correct, sa.marks_obtained,
+           ROUND(sa.time_taken_seconds, 0) AS time_taken_seconds,
+           q.correct_answer
+    FROM Questions q
+    LEFT JOIN StudentAnswers sa ON sa.question_id = q.question_id AND sa.attempt_id = ?
+    JOIN ExamAttempts ea ON ea.attempt_id = ?
+    WHERE q.exam_id = ea.exam_id
+    ORDER BY q.question_id`, [attempt_id, attempt_id]);
+
+  const passed = attempt.score != null && attempt.score >= attempt.passing_marks;
+
+  res.json({
+    student:    attempt.full_name,
+    exam:       attempt.exam_title,
+    score:      attempt.score != null ? `${attempt.score}/${attempt.total_marks}` : `—/${attempt.total_marks}`,
+    percentage: attempt.percentage != null ? `${attempt.percentage}%` : '—',
+    result:     attempt.status === 'flagged' ? 'Under Review'
+              : attempt.status === 'timed_out' ? 'Timed Out'
+              : passed ? 'PASS' : 'FAIL',
+    resultColor: attempt.status === 'flagged' ? 'var(--yellow)'
+               : attempt.status === 'timed_out' ? 'var(--orange)'
+               : passed ? 'var(--green)' : 'var(--red)',
+    duration:   attempt.duration_min != null ? `${attempt.duration_min} min` : '—',
+    questions:  questions.map((q, i) => ({
+      num:       i + 1,
+      text:      q.question_text,
+      marks:     q.marks,
+      answered:  q.selected_option ?? '—',
+      correct:   q.correct_answer,
+      isCorrect: q.is_correct,
+      earned:    q.marks_obtained ?? 0,
+      timeSec:   q.time_taken_seconds ?? null,
+    })),
+  });
 });
 
 // ── GET /api/exams ────────────────────────────────────────────
-route('get', '/api/exams', async (_req, res) => {
+route('get', '/api/exams', async (req, res) => {
+    const { userId, role } = await getUserWithRole(req);
+    const ownerSql    = (role === 'teacher') ? 'WHERE e.created_by = ?' : '';
+    const ownerParams = (role === 'teacher') ? [userId] : [];
+
     const rows = await q(`
       SELECT
         e.exam_id,
         e.title,
+        e.join_code,
+        e.is_published,
         c.course_code,
         c.course_name,
         u.full_name                                                    AS instructor,
@@ -798,7 +1060,9 @@ route('get', '/api/exams', async (_req, res) => {
         e.max_attempts,
         e.shuffle_questions,
         e.show_results_immediately,
-        (SELECT COUNT(*) FROM Questions q WHERE q.exam_id = e.exam_id) AS question_count,
+        (SELECT COUNT(*) FROM Questions q WHERE q.exam_id = e.exam_id)       AS question_count,
+        (SELECT COALESCE(SUM(q.marks),0) FROM Questions q WHERE q.exam_id = e.exam_id) AS questions_marks_total,
+        (SELECT COUNT(*) FROM ExamAttempts ea2 WHERE ea2.exam_id=e.exam_id AND ea2.status='in_progress') AS live_count,
         COUNT(DISTINCT ea.attempt_id)                                  AS total_attempts,
         SUM(ea.status IN ('submitted','graded','flagged'))             AS completed,
         SUM(ea.status = 'flagged')                                     AS flagged,
@@ -809,42 +1073,57 @@ route('get', '/api/exams', async (_req, res) => {
       JOIN Courses c ON e.course_id  = c.course_id
       JOIN Users   u ON e.created_by = u.user_id
       LEFT JOIN ExamAttempts ea ON e.exam_id = ea.exam_id
-      GROUP BY e.exam_id, e.title, c.course_code, c.course_name,
+      ${ownerSql}
+      GROUP BY e.exam_id, e.title, e.join_code, e.is_published, c.course_code, c.course_name,
                u.full_name, e.total_marks, e.passing_marks, e.duration_minutes,
                e.window_start, e.window_end, e.max_attempts,
                e.shuffle_questions, e.show_results_immediately
-      ORDER BY e.window_start DESC`
+      ORDER BY e.window_start DESC`,
+      ownerParams
     );
 
     const now = new Date();
     const exams = rows.map(r => {
-      const start    = new Date(r.window_start);
-      const end      = new Date(r.window_end);
-      const upcoming = now < start;
-      const active   = now >= start && now <= end;
-      const statusText  = upcoming ? 'Upcoming' : active ? 'Active' : 'Completed';
-      const statusBadge = upcoming ? 'badge-purple' : active ? 'badge-green' : 'badge-gray';
+      const start      = new Date(r.window_start);
+      const end        = new Date(r.window_end);
+      const published  = !!r.is_published;
+      const draft      = !published;
+      const upcoming   = published && now < start;
+      const active     = published && now >= start && now <= end;
+      const statusText  = draft ? 'Draft' : upcoming ? 'Upcoming' : active ? 'Active' : 'Completed';
+      const statusBadge = draft ? 'badge-gray' : upcoming ? 'badge-purple' : active ? 'badge-green' : 'badge-gray';
       const passRate = r.completed > 0
         ? Math.round((r.passed / r.completed) * 100) + '%'
         : '—';
       return {
-        id:           r.exam_id,
-        title:        r.title,
-        course:       `${r.course_code} · ${r.course_name}`,
-        instructor:   r.instructor,
-        marks:        `${r.passing_marks}/${r.total_marks}`,
-        duration:     `${r.duration_minutes} min`,
-        questions:    r.question_count,
-        window:       `${fmtDate(r.window_start)} → ${fmtDate(r.window_end)}`,
+        id:                r.exam_id,
+        title:             r.title,
+        joinCode:          r.join_code || null,
+        course:            `${r.course_code} · ${r.course_name}`,
+        courseCode:        r.course_code,
+        instructor:        r.instructor,
+        totalMarks:        r.total_marks,
+        passingMarks:      r.passing_marks,
+        marks:             `${r.passing_marks}/${r.total_marks}`,
+        duration:          r.duration_minutes,
+        durationFmt:       `${r.duration_minutes} min`,
+        questions:         r.question_count,
+        questionsTotalMarks: parseFloat(r.questions_marks_total) || 0,
+        marksMismatch:     Math.abs(parseFloat(r.questions_marks_total) - parseFloat(r.total_marks)) > 0.01,
+        window:            `${fmtDate(r.window_start)} → ${fmtDate(r.window_end)}`,
         statusText,
         statusBadge,
-        attempts:     r.total_attempts,
-        completed:    r.completed || 0,
-        flagged:      r.flagged   || 0,
-        avgScore:     r.avg_pct   || '—',
+        isDraft:           draft,
+        isActive:          active,
+        isUpcoming:        upcoming,
+        liveCount:         r.live_count || 0,
+        attempts:          r.total_attempts,
+        completed:         r.completed || 0,
+        flagged:           r.flagged   || 0,
+        avgScore:          r.avg_pct   || '—',
         passRate,
-        shuffle:      r.shuffle_questions  ? '✓' : '—',
-        showResults:  r.show_results_immediately ? '✓' : '—',
+        shuffle:           r.shuffle_questions  ? 'Yes' : '—',
+        showResults:       r.show_results_immediately ? 'Yes' : '—',
       };
     });
 
@@ -852,7 +1131,11 @@ route('get', '/api/exams', async (_req, res) => {
 });
 
 // ── GET /api/questions ────────────────────────────────────────
-route('get', '/api/questions', async (_req, res) => {
+route('get', '/api/questions', async (req, res) => {
+    const { userId, role } = await getUserWithRole(req);
+    const ownerSql    = (role === 'teacher') ? 'AND e.created_by = ?' : '';
+    const ownerParams = (role === 'teacher') ? [userId] : [];
+
     const rows = await q(`
       SELECT
         q.question_id,
@@ -865,6 +1148,7 @@ route('get', '/api/questions', async (_req, res) => {
         q.marks,
         q.difficulty_level,
         q.option_a, q.option_b, q.option_c, q.option_d,
+        q.option_e, q.option_f, q.option_g, q.option_h, q.option_i, q.option_j,
         q.correct_answer,
         COUNT(sa.answer_id)                                             AS times_answered,
         SUM(sa.is_correct = TRUE)                                       AS correct_count,
@@ -876,14 +1160,19 @@ route('get', '/api/questions', async (_req, res) => {
       JOIN Exams   e ON q.exam_id    = e.exam_id
       JOIN Courses c ON e.course_id  = c.course_id
       LEFT JOIN StudentAnswers sa ON q.question_id = sa.question_id
+      WHERE 1=1 ${ownerSql}
       GROUP BY q.question_id, q.exam_id, e.title, c.course_code,
                q.order_index, q.question_text, q.question_type,
                q.marks, q.difficulty_level,
-               q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer
-      ORDER BY q.exam_id ASC, q.order_index ASC`
+               q.option_a, q.option_b, q.option_c, q.option_d,
+               q.option_e, q.option_f, q.option_g, q.option_h, q.option_i, q.option_j,
+               q.correct_answer
+      ORDER BY q.exam_id ASC, q.order_index ASC`,
+      ownerParams
     );
 
     const diffBadge = d => d === 'easy' ? 'badge-green' : d === 'medium' ? 'badge-yellow' : 'badge-red';
+    const OPT_LABELS = ['A','B','C','D','E','F','G','H','I','J'];
 
     const questions = rows.map(r => {
       const pct = r.correct_pct ?? null;
@@ -898,12 +1187,9 @@ route('get', '/api/questions', async (_req, res) => {
         marks:       r.marks,
         difficulty:  r.difficulty_level,
         diffBadge:   diffBadge(r.difficulty_level),
-        options: [
-          { letter: 'A', text: r.option_a },
-          { letter: 'B', text: r.option_b },
-          { letter: 'C', text: r.option_c },
-          { letter: 'D', text: r.option_d },
-        ].filter(o => o.text),
+        options: OPT_LABELS
+          .map(l => ({ letter: l, text: r[`option_${l.toLowerCase()}`] }))
+          .filter(o => o.text),
         answer:      r.correct_answer,
         answered:    r.times_answered || 0,
         correctPct:  pct !== null ? `${pct}%` : '—',
@@ -928,8 +1214,11 @@ route('get', '/api/questions', async (_req, res) => {
 
 // ── GET /api/export ───────────────────────────────────────────
 // Generates and streams a CSV report of all exam attempts.
-// The browser receives it as a file download.
-route('get', '/api/export', async (_req, res) => {
+// Admin only.
+route('get', '/api/export', async (req, res) => {
+  const { role } = await getUserWithRole(req);
+  if (role !== 'admin')
+    return res.status(403).json({ error: 'Admin access required' });
     // ── Section 1: Per-attempt results ────────────────────────
     const attempts = await q(`
       SELECT
@@ -946,7 +1235,6 @@ route('get', '/api/export', async (_req, res) => {
         ea.suspicion_score,
         ea.tab_switches,
         ea.copy_paste_attempts,
-        ea.face_not_detected,
         ea.fullscreen_exits,
         ea.ip_address,
         DATE_FORMAT(ea.started_at,   '%Y-%m-%d %H:%i')               AS started_at,
@@ -1019,15 +1307,14 @@ route('get', '/api/export', async (_req, res) => {
     lines.push(row([
       'Student Name', 'Email', 'Exam', 'Course',
       'Attempt ID', 'Score', 'Total Marks', 'Percentage', 'Result', 'Status',
-      'Suspicion Score', 'Tab Switches', 'Copy-Paste', 'Face Issues', 'Fullscreen Exits',
+      'Suspicion Score', 'Tab Switches', 'Copy-Paste', 'Fullscreen Exits',
       'IP Address', 'Started', 'Submitted', 'Duration (min)',
     ]));
     for (const a of attempts) {
       lines.push(row([
         a.student_name, a.email, a.exam_title, a.course_code,
         a.attempt_id, a.score, a.total_marks, a.percentage, a.result, a.status,
-        a.suspicion_score, a.tab_switches, a.copy_paste_attempts,
-        a.face_not_detected, a.fullscreen_exits,
+        a.suspicion_score, a.tab_switches, a.copy_paste_attempts, a.fullscreen_exits,
         a.ip_address, a.started_at, a.submitted_at, a.duration_min,
       ]));
     }
@@ -1049,11 +1336,15 @@ route('get', '/api/export', async (_req, res) => {
 });
 
 // ── GET /api/courses ──────────────────────────────────────────
-route('get', '/api/courses', async (_req, res) => {
+route('get', '/api/courses', async (req, res) => {
+  const { userId, role } = await getUserWithRole(req);
+  const ownerSql    = (role === 'teacher') ? 'AND c.instructor_id = ?' : '';
+  const ownerParams = (role === 'teacher') ? [userId] : [];
   const rows = await q(
     `SELECT c.course_id, c.course_code, c.course_name, u.full_name AS instructor
      FROM Courses c JOIN Users u ON c.instructor_id = u.user_id
-     WHERE c.is_active = TRUE ORDER BY c.course_name`
+     WHERE c.is_active = TRUE ${ownerSql} ORDER BY c.course_name`,
+    ownerParams
   );
   res.json({ courses: rows });
 });
@@ -1066,8 +1357,10 @@ route('post', '/api/exams', async (req, res) => {
     shuffle_questions, show_results_immediately, is_published,
   } = req.body;
 
-  const created_by = await getUserFromToken(req);
+  const { userId: created_by, roles: creatorRoles } = await getUserWithRole(req);
   if (!created_by) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(creatorRoles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers and admins can create exams' });
 
   // Server-side validation (mirrors DB CHECK constraints)
   const tm = parseFloat(total_marks);
@@ -1108,6 +1401,12 @@ route('post', '/api/exams', async (req, res) => {
 //   ExamAttempts → cascades to StudentAnswers, ProctorLogs, SuspicionFlags
 //   then Exams   → cascades to Questions
 route('delete', '/api/exams/:id', async (req, res) => {
+  const { userId: delUserId, roles: delRoles } = await getUserWithRole(req);
+  if (!delUserId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(delRoles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers and admins can delete exams' });
+  const [[examRow]] = await pool.execute(`SELECT exam_id FROM Exams WHERE exam_id=?`, [req.params.id]);
+  if (!examRow) return res.status(404).json({ error: 'Exam not found' });
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -1123,38 +1422,174 @@ route('delete', '/api/exams/:id', async (req, res) => {
   }
 });
 
+// ── PATCH /api/exams/:id/open ─────────────────────────────────
+// Opens (or schedules) an exam.
+// Body: { duration_hours, scheduled_at? }
+//   scheduled_at — ISO datetime string; if future, must be ≥ NOW + 10 min.
+//   If omitted/past, defaults to NOW (open immediately).
+route('patch', '/api/exams/:id/open', async (req, res) => {
+  const { userId, role, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers and admins can open exams' });
+  const examId      = parseInt(req.params.id);
+  const durationHrs = parseFloat(req.body.duration_hours) || 2;
+
+  // Ownership check
+  if (role === 'teacher') {
+    const rows = await q(`SELECT created_by FROM Exams WHERE exam_id = ?`, [examId]);
+    if (!rows.length || rows[0].created_by !== userId)
+      return res.status(403).json({ error: 'You can only open your own exams.' });
+  }
+
+  // ── Hard block 1: exam must have at least 1 question ─────────
+  const [[qCount]] = await pool.execute(
+    `SELECT COUNT(*) AS cnt FROM Questions WHERE exam_id = ?`, [examId]
+  );
+  if (qCount.cnt === 0)
+    return res.status(400).json({ error: 'Cannot open an exam with no questions. Add at least one question first.' });
+
+  // ── Hard block 2: question marks total must equal declared total_marks ──
+  const [[examRow]] = await pool.execute(
+    `SELECT e.total_marks,
+            COALESCE(SUM(q.marks), 0) AS questions_total
+     FROM Exams e
+     LEFT JOIN Questions q ON q.exam_id = e.exam_id
+     WHERE e.exam_id = ?
+     GROUP BY e.exam_id`, [examId]
+  );
+  if (Math.abs(parseFloat(examRow.questions_total) - parseFloat(examRow.total_marks)) > 0.01)
+    return res.status(400).json({
+      error: `Marks mismatch: questions sum to ${examRow.questions_total} but exam declares ${examRow.total_marks}. Adjust question marks or the exam total before opening.`
+    });
+
+  // ── Scheduling: optional scheduled_at (must be ≥ NOW + 10 min) ─
+  let windowStart = 'NOW()';
+  let windowStartParam = null;
+  if (req.body.scheduled_at) {
+    const sched = new Date(req.body.scheduled_at);
+    const minStart = new Date(Date.now() + 10 * 60 * 1000);
+    if (isNaN(sched.getTime()))
+      return res.status(400).json({ error: 'Invalid scheduled_at date.' });
+    if (sched < minStart)
+      return res.status(400).json({ error: 'Scheduled start must be at least 10 minutes from now.' });
+    windowStartParam = sched;
+  }
+
+  // Generate join_code if exam doesn't have one yet
+  const [[codeRow]] = await pool.execute(
+    `SELECT join_code FROM Exams WHERE exam_id = ?`, [examId]
+  );
+  let join_code = codeRow?.join_code;
+  if (!join_code) {
+    let tries = 0;
+    do {
+      join_code = makeJoinCode();
+      const [[exists]] = await pool.execute(`SELECT exam_id FROM Exams WHERE join_code=?`, [join_code]);
+      if (!exists) break;
+    } while (++tries < 10);
+    await pool.execute(`UPDATE Exams SET join_code=? WHERE exam_id=?`, [join_code, examId]);
+  }
+
+  if (windowStartParam) {
+    await pool.execute(
+      `UPDATE Exams
+       SET is_published = TRUE,
+           window_start = ?,
+           window_end   = DATE_ADD(?, INTERVAL ? HOUR)
+       WHERE exam_id = ?`,
+      [windowStartParam, windowStartParam, durationHrs, examId]
+    );
+  } else {
+    await pool.execute(
+      `UPDATE Exams
+       SET is_published = TRUE,
+           window_start = NOW(),
+           window_end   = DATE_ADD(NOW(), INTERVAL ? HOUR)
+       WHERE exam_id = ?`,
+      [durationHrs, examId]
+    );
+  }
+
+  const scheduled = !!windowStartParam;
+  res.json({ success: true, join_code, scheduled, window_start: windowStartParam?.toISOString() || null });
+});
+
+// ── PATCH /api/exams/:id/close ────────────────────────────────
+// Closes an exam immediately by setting window_end to NOW. Instructor must own the exam.
+route('patch', '/api/exams/:id/close', async (req, res) => {
+  const { userId, role, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers and admins can close exams' });
+  const examId = parseInt(req.params.id);
+
+  if (role === 'teacher' || role === 'proctor') {
+    const rows = await q(`SELECT created_by FROM Exams WHERE exam_id = ?`, [examId]);
+    if (!rows.length || rows[0].created_by !== userId)
+      return res.status(403).json({ error: 'You can only close your own exams.' });
+  }
+
+  await pool.execute(
+    `UPDATE Exams SET window_end = DATE_ADD(window_start, INTERVAL 1 SECOND), is_published = 0 WHERE exam_id = ?`,
+    [examId]
+  );
+  res.json({ success: true });
+});
+
 // ── POST /api/questions ───────────────────────────────────────
 route('post', '/api/questions', async (req, res) => {
+  const { userId: qUserId, roles: qRoles } = await getUserWithRole(req);
+  if (!qUserId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(qRoles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers and admins can add questions' });
+
   const {
     exam_id, question_text, question_type, marks,
     option_a, option_b, option_c, option_d,
+    option_e, option_f, option_g, option_h, option_i, option_j,
     correct_answer, difficulty_level, order_index,
   } = req.body;
 
   const qtype = question_type || 'MCQ';
   const m = parseFloat(marks);
 
-  if (!exam_id || !question_text || !correct_answer)
-    return res.status(400).json({ error: 'Missing required fields: exam_id, question_text, correct_answer' });
+  if (!exam_id || !question_text)
+    return res.status(400).json({ error: 'Missing required fields: exam_id, question_text' });
   if (isNaN(m) || m <= 0)
     return res.status(400).json({ error: 'marks must be > 0' });
-  if (qtype === 'MCQ' && (!option_a || !option_b || !option_c || !option_d))
-    return res.status(400).json({ error: 'MCQ questions require all four options (A, B, C, D)' });
-  if (qtype === 'MCQ' && !['A','B','C','D'].includes(correct_answer.toUpperCase()))
-    return res.status(400).json({ error: 'MCQ correct_answer must be A, B, C, or D' });
-  if (qtype === 'TRUE_FALSE' && !['TRUE','FALSE'].includes(correct_answer.toUpperCase()))
+
+  if (qtype === 'MCQ') {
+    const opts = { A: option_a, B: option_b, C: option_c, D: option_d,
+                   E: option_e, F: option_f, G: option_g, H: option_h,
+                   I: option_i, J: option_j };
+    const provided = Object.entries(opts).filter(([, v]) => v && v.trim());
+    if (provided.length < 2)
+      return res.status(400).json({ error: 'MCQ questions require at least 2 options' });
+    if (correct_answer) {
+      const validKeys = provided.map(([k]) => k);
+      const ans = correct_answer.toUpperCase();
+      if (!validKeys.includes(ans))
+        return res.status(400).json({ error: `MCQ correct_answer must be one of: ${validKeys.join(', ')}` });
+    }
+  }
+  if (qtype === 'TRUE_FALSE' && correct_answer &&
+      !['TRUE','FALSE'].includes(correct_answer.toUpperCase()))
     return res.status(400).json({ error: 'TRUE_FALSE correct_answer must be TRUE or FALSE' });
 
   const [result] = await pool.execute(
     `INSERT INTO Questions
        (exam_id, question_text, question_type, marks,
         option_a, option_b, option_c, option_d,
+        option_e, option_f, option_g, option_h, option_i, option_j,
         correct_answer, difficulty_level, order_index)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       exam_id, question_text, qtype, m,
-      option_a || null, option_b || null, option_c || null, option_d || null,
-      correct_answer, difficulty_level || 'medium', order_index || 0,
+      option_a||null, option_b||null, option_c||null, option_d||null,
+      option_e||null, option_f||null, option_g||null, option_h||null,
+      option_i||null, option_j||null,
+      correct_answer || null, difficulty_level || 'medium', order_index || 0,
     ]
   );
   res.json({ success: true, question_id: result.insertId });
@@ -1184,13 +1619,23 @@ route('post', '/api/flags/:id/resolve', async (req, res) => {
 // ── POST /api/proctor-event ───────────────────────────────────
 // T4 fires after INSERT to update suspicion_score; T5 auto-flags if threshold crossed.
 route('post', '/api/proctor-event', async (req, res) => {
+  const { userId } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
   const { attempt_id, event_type, severity, details } = req.body;
   if (!attempt_id || !event_type)
     return res.status(400).json({ error: 'attempt_id and event_type are required' });
+
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+
+  // Ensure the caller owns this attempt (prevent forged events for other students)
+  const ownerRows = await q(`SELECT student_id FROM ExamAttempts WHERE attempt_id = ?`, [attempt_id]);
+  if (!ownerRows.length || ownerRows[0].student_id !== userId)
+    return res.status(403).json({ error: 'Not authorised to log events for this attempt' });
   await pool.execute(
-    `INSERT INTO ProctorLogs (attempt_id, event_type, severity, event_details)
-     VALUES (?, ?, ?, ?)`,
-    [attempt_id, event_type, severity || 'MEDIUM', details || null]
+    `INSERT INTO ProctorLogs (attempt_id, event_type, severity, event_details, ip_address)
+     VALUES (?, ?, ?, ?, ?)`,
+    [attempt_id, event_type, severity || 'MEDIUM', details || null, ip]
   );
   res.json({ success: true });
 });
@@ -1205,17 +1650,22 @@ route('post', '/api/signup', async (req, res) => {
   if (password.length < 6)
     return res.status(400).json({ error: 'Password must be at least 6 characters' });
 
-  // Validate username (alphanum + underscore only)
-  if (!/^\w{3,30}$/.test(username))
-    return res.status(400).json({ error: 'Username must be 3–30 characters (letters, numbers, _)' });
+  // Validate username: 3–30 chars, letters/numbers/underscore/dot/@ allowed
+  if (!/^[\w.@]{3,30}$/.test(username))
+    return res.status(400).json({ error: 'Username must be 3–30 characters (letters, numbers, _ . @)' });
 
-  // Determine primary role (student < proctor < instructor, admin only via DB)
-  const RANK = { student: 1, proctor: 2, instructor: 3 };
+  const ALLOWED_ROLES = ['student', 'teacher'];
+  const badRole = roles.find(r => !ALLOWED_ROLES.includes(r));
+  if (badRole)
+    return res.status(400).json({ error: `Invalid role '${badRole}'. Allowed: student, teacher` });
+
+  // Determine primary role (student < teacher, admin only via DB)
+  const RANK = { student: 1, teacher: 2 };
   const primaryRole = roles.reduce((best, r) => (RANK[r] || 0) > (RANK[best] || 0) ? r : best, roles[0]);
   const extraRoles  = roles.filter(r => r !== primaryRole);
 
   const hash  = hashPw(password);
-  const email = `${username}@examguard.local`;   // synthetic email; username is the login key
+  const email = `${username.replace(/@/g, '.')}@examguard.local`;   // synthetic email; @ in username → dot to keep email valid
 
   let result;
   try {
@@ -1249,7 +1699,7 @@ route('post', '/api/login', async (req, res) => {
     [identifier, identifier]
   );
   if (!rows.length || !checkPw(password, rows[0].password_hash))
-    return res.status(401).json({ error: 'Invalid username or password' });
+    return res.status(400).json({ error: 'Invalid username or password' });
 
   const user  = rows[0];
 
@@ -1257,7 +1707,7 @@ route('post', '/api/login', async (req, res) => {
   const extraRows = await q(`SELECT role FROM UserRoles WHERE user_id = ?`, [user.user_id]);
   const roles = [user.role, ...extraRows.map(r => r.role)].filter((v, i, a) => a.indexOf(v) === i);
 
-  const token  = Buffer.from(`${user.user_id}:${Date.now()}:${Math.random()}`).toString('base64');
+  const token  = crypto.randomBytes(32).toString('hex');
   const ip     = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
   const device = (req.headers['user-agent'] || 'unknown').substring(0, 255);
 
@@ -1287,7 +1737,7 @@ route('post', '/api/logout', async (req, res) => {
 route('get', '/api/users/instructors', async (_req, res) => {
   const rows = await q(
     `SELECT user_id, full_name, email FROM Users
-     WHERE role IN ('instructor','admin') AND is_active = TRUE ORDER BY full_name`
+     WHERE role IN ('instructor','teacher','admin') AND is_active = TRUE ORDER BY full_name`
   );
   res.json({ instructors: rows });
 });
@@ -1312,12 +1762,24 @@ route('get', '/api/courses/all', async (_req, res) => {
 
 // ── POST /api/courses ─────────────────────────────────────────
 route('post', '/api/courses', async (req, res) => {
+  const { userId, role, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers and admins can create courses' });
+
   const { course_code, course_name, description, instructor_id } = req.body;
   if (!course_code || !course_name || !instructor_id)
     return res.status(400).json({ error: 'course_code, course_name and instructor_id are required' });
+
+  // Instructors/teachers can only create courses for themselves
+  const isTeacherRole = role === 'teacher';
+  const effectiveInstructorId = isTeacherRole ? userId : parseInt(instructor_id);
+  if (isTeacherRole && parseInt(instructor_id) !== userId)
+    return res.status(403).json({ error: 'Instructors can only create courses for themselves.' });
+
   const [result] = await pool.execute(
     `INSERT INTO Courses (course_code, course_name, description, instructor_id) VALUES (?,?,?,?)`,
-    [course_code, course_name, description || null, instructor_id]
+    [course_code, course_name, description || null, effectiveInstructorId]
   );
   res.json({ success: true, course_id: result.insertId });
 });
@@ -1328,11 +1790,187 @@ route('delete', '/api/courses/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// ── CLASSROOM ENDPOINTS ───────────────────────────────────────
+// One active classroom at a time: proctor creates it (gets a code),
+// students enter the code to auto-enroll + start their attempt.
+
+// Generate a random 6-char join code (uppercase, no O/0/I/1/L)
+function makeJoinCode() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+// GET /api/classroom/active — returns the single live classroom (if any)
+route('get', '/api/classroom/active', async (req, res) => {
+  const { userId, role } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
+  const rows = await q(
+    `SELECT e.exam_id, e.title, e.join_code, e.duration_minutes,
+            e.total_marks, e.passing_marks, e.window_start, e.window_end,
+            c.course_name,
+            (SELECT COUNT(*) FROM ExamAttempts ea WHERE ea.exam_id=e.exam_id AND ea.status='in_progress') AS live_count,
+            (SELECT COUNT(*) FROM ExamAttempts ea WHERE ea.exam_id=e.exam_id) AS total_joined
+     FROM   Exams e JOIN Courses c ON e.course_id=c.course_id
+     WHERE  e.is_published=TRUE AND e.window_start<=NOW() AND e.window_end>=NOW()
+     ORDER  BY e.exam_id DESC`
+  );
+  // Return both: `classrooms` array (all active) and legacy `classroom` (first) for backward compat
+  res.json({ classroom: rows[0] || null, classrooms: rows });
+});
+
+// POST /api/classroom/create — teacher/admin creates a new live classroom
+route('post', '/api/classroom/create', async (req, res) => {
+  const { userId, role, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers can create classrooms' });
+
+  const { title, duration_minutes = 60, total_marks = 100, passing_marks = 40 } = req.body;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+
+  // Create a dedicated course for each session (named after the exam title)
+  const [[defaultCourse]] = await pool.execute(
+    `SELECT course_id FROM Courses WHERE instructor_id=? AND course_code NOT LIKE 'ROOM%' LIMIT 1`, [userId]
+  );
+  let course_id;
+  if (defaultCourse) {
+    course_id = defaultCourse.course_id;
+  } else {
+    const [cr] = await pool.execute(
+      `INSERT INTO Courses (course_code, course_name, description, instructor_id)
+       VALUES (?,?,?,?)`,
+      [`ROOM${Date.now()}`.substring(0, 20), title, 'Auto-created classroom', userId]
+    );
+    course_id = cr.insertId;
+  }
+
+  // Generate a unique join code
+  let join_code, tries = 0;
+  do {
+    join_code = makeJoinCode();
+    const [[exists]] = await pool.execute(`SELECT exam_id FROM Exams WHERE join_code=?`, [join_code]);
+    if (!exists) break;
+  } while (++tries < 10);
+
+  const windowEnd = new Date(Date.now() + 8 * 60 * 60 * 1000); // 8-hour window by default
+
+  const [result] = await pool.execute(
+    `INSERT INTO Exams
+       (course_id, title, total_marks, passing_marks, duration_minutes,
+        window_start, window_end, created_by, is_published, max_attempts,
+        shuffle_questions, show_results_immediately, join_code)
+     VALUES (?,?,?,?,?,NOW(),?,?,TRUE,99,FALSE,FALSE,?)`,
+    [course_id, title, total_marks, passing_marks, duration_minutes, windowEnd, userId, join_code]
+  );
+
+  res.json({ success: true, exam_id: result.insertId, join_code });
+});
+
+// POST /api/classroom/join — student enters join code to auto-enroll + start attempt
+route('post', '/api/classroom/join', async (req, res) => {
+  const student_id = await getUserFromToken(req);
+  if (!student_id) return res.status(401).json({ error: 'Not authenticated' });
+
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'code is required' });
+
+  const [[exam]] = await pool.execute(
+    `SELECT e.exam_id, e.course_id, e.title, e.duration_minutes,
+            e.total_marks, e.passing_marks, e.window_start, e.window_end
+     FROM   Exams e
+     WHERE  e.join_code = ? AND e.is_published=TRUE
+       AND  e.window_start<=NOW() AND e.window_end>=NOW()`,
+    [code.toUpperCase().trim()]
+  );
+  if (!exam) return res.status(404).json({ error: 'No active classroom with that code. Check the code and try again.' });
+
+  const ip      = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+  const browser = (req.headers['user-agent'] || 'unknown').substring(0, 255);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Auto-enroll student in the course (ignore if already enrolled)
+    await conn.execute(
+      `INSERT IGNORE INTO Enrollments (student_id, course_id, status) VALUES (?,?,'active')`,
+      [student_id, exam.course_id]
+    );
+
+    // Check if already has an in-progress attempt
+    const [[existing]] = await conn.execute(
+      `SELECT attempt_id FROM ExamAttempts WHERE exam_id=? AND student_id=? AND status='in_progress'`,
+      [exam.exam_id, student_id]
+    );
+    if (existing) {
+      // Resume existing attempt
+      await conn.commit();
+      const [questions] = await conn.execute(
+        `SELECT question_id, question_text, question_type, marks,
+                option_a, option_b, option_c, option_d, option_e, option_f,
+                option_g, option_h, option_i, option_j, order_index, difficulty_level
+         FROM   Questions WHERE exam_id=? ORDER BY order_index ASC, question_id ASC`,
+        [exam.exam_id]
+      );
+      return res.json({ attempt_id: existing.attempt_id, exam, questions, resumed: true });
+    }
+
+    // T1 fires: validates window + attempt limit
+    const [result] = await conn.execute(
+      `INSERT INTO ExamAttempts (exam_id, student_id, ip_address, browser_info) VALUES (?,?,?,?)`,
+      [exam.exam_id, student_id, ip, browser]
+    );
+    const attempt_id = result.insertId;
+
+    await conn.execute(
+      `INSERT INTO ProctorLogs (attempt_id, event_type, severity, event_details, ip_address)
+       VALUES (?,?,?,?,?)`,
+      [attempt_id, 'EXAM_STARTED', 'INFO', `Joined via code ${code.toUpperCase()}. Browser: ${browser}`, ip]
+    );
+
+    await conn.commit();
+
+    const [questions] = await conn.execute(
+      `SELECT question_id, question_text, question_type, marks,
+              option_a, option_b, option_c, option_d,
+              option_e, option_f, option_g, option_h, option_i, option_j,
+              order_index, difficulty_level
+       FROM   Questions WHERE exam_id=? ORDER BY order_index ASC, question_id ASC`,
+      [exam.exam_id]
+    );
+
+    res.json({ attempt_id, exam, questions, resumed: false });
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+});
+
+// POST /api/classroom/end — teacher ends the active classroom
+route('post', '/api/classroom/end', async (req, res) => {
+  const { userId, role, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers can end classrooms' });
+
+  const { exam_id } = req.body;
+  await pool.execute(
+    `UPDATE Exams SET window_end=DATE_ADD(window_start, INTERVAL 1 SECOND) WHERE exam_id=? AND is_published=TRUE`, [exam_id]
+  );
+  res.json({ success: true });
+});
+
 // ── POST /api/exams/:id/start ─────────────────────────────────
 // Creates ExamAttempt (T1 validates window/attempts), logs EXAM_STARTED.
 // Returns attempt_id + questions (no correct_answer) + exam meta.
 route('post', '/api/exams/:id/start', async (req, res) => {
-  const { student_id } = req.body;
+  const student_id = await getUserFromToken(req);
+  if (!student_id) return res.status(401).json({ error: 'Not authenticated' });
   const exam_id = parseInt(req.params.id);
   const ip      = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
   const browser = (req.headers['user-agent'] || 'unknown').substring(0, 255);
@@ -1369,7 +2007,8 @@ route('post', '/api/exams/:id/start', async (req, res) => {
     // Return questions WITHOUT correct_answer
     const [questions] = await conn.execute(
       `SELECT question_id, question_text, question_type, marks,
-              option_a, option_b, option_c, option_d,
+              option_a, option_b, option_c, option_d, option_e, option_f,
+              option_g, option_h, option_i, option_j,
               order_index, difficulty_level
        FROM Questions WHERE exam_id = ? ORDER BY order_index ASC, question_id ASC`,
       [exam_id]
@@ -1409,7 +2048,7 @@ route('post', '/api/attempts/:id/answer', async (req, res) => {
   }
 
   await pool.execute(
-    `INSERT INTO StudentAnswers AS sa
+    `INSERT INTO StudentAnswers
        (attempt_id, question_id, selected_option, time_taken_seconds, is_correct, marks_obtained)
      VALUES (?,?,?,?,?,?) AS new_row
      ON DUPLICATE KEY UPDATE
@@ -1499,8 +2138,18 @@ route('get', '/api/attempts/:id/warnings', async (req, res) => {
 // Proctor sends a warning to a student's active attempt.
 // severity must be LOW | MEDIUM | HIGH | CRITICAL.
 route('post', '/api/proctor/warn', async (req, res) => {
+  const { userId, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'admin', 'teacher'))
+    return res.status(403).json({ error: 'Teacher access required' });
   const { attempt_id, severity, message } = req.body;
   if (!attempt_id) return res.status(400).json({ error: 'attempt_id required' });
+  const [[attempt]] = await pool.execute(
+    `SELECT status FROM ExamAttempts WHERE attempt_id = ?`, [attempt_id]
+  );
+  if (!attempt) return res.status(404).json({ error: 'Attempt not found' });
+  if (!['in_progress', 'flagged'].includes(attempt.status))
+    return res.status(409).json({ error: `Cannot warn — attempt is already ${attempt.status}` });
   const sev = ['LOW','MEDIUM','HIGH','CRITICAL'].includes(severity) ? severity : 'MEDIUM';
   await pool.execute(
     `INSERT INTO ProctorLogs (attempt_id, event_type, severity, event_details)
@@ -1513,6 +2162,10 @@ route('post', '/api/proctor/warn', async (req, res) => {
 // ── POST /api/proctor/kick/:attempt_id ────────────────────────
 // Proctor forcibly ends a student's attempt (status → abandoned).
 route('post', '/api/proctor/kick/:attempt_id', async (req, res) => {
+  const { userId, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'admin', 'teacher'))
+    return res.status(403).json({ error: 'Teacher access required' });
   const attempt_id = parseInt(req.params.attempt_id);
   const { reason } = req.body;
   const conn = await pool.getConnection();
@@ -1522,7 +2175,8 @@ route('post', '/api/proctor/kick/:attempt_id', async (req, res) => {
       `SELECT status FROM ExamAttempts WHERE attempt_id = ? FOR UPDATE`, [attempt_id]
     );
     if (!row) throw new Error('Attempt not found');
-    if (row.status !== 'in_progress') throw new Error('Attempt is not in progress');
+    if (!['in_progress', 'flagged'].includes(row.status))
+      return res.status(409).json({ error: `Cannot kick — attempt is already ${row.status}` });
 
     await conn.execute(
       `UPDATE ExamAttempts SET status = 'abandoned', submitted_at = NOW() WHERE attempt_id = ?`,
@@ -1530,8 +2184,8 @@ route('post', '/api/proctor/kick/:attempt_id', async (req, res) => {
     );
     await conn.execute(
       `INSERT INTO ProctorLogs (attempt_id, event_type, severity, event_details)
-       VALUES (?, 'EXAM_SUBMITTED', 'CRITICAL', ?)`,
-      [attempt_id, reason ? `Kicked by proctor: ${reason}` : 'Removed from exam by proctor']
+       VALUES (?, 'PROCTOR_KICK', 'CRITICAL', ?)`,
+      [attempt_id, reason ? `Removed by proctor: ${reason}` : 'Removed from exam by proctor']
     );
     await conn.commit();
     res.json({ success: true });
@@ -1540,8 +2194,107 @@ route('post', '/api/proctor/kick/:attempt_id', async (req, res) => {
   } finally { conn.release(); }
 });
 
-// ── Start ─────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\nExamProctor server running at http://localhost:${PORT}`);
-  console.log(`UI dashboard → http://localhost:${PORT}/index.html\n`);
+// ── GET /api/proctor-actions ──────────────────────────────────
+// Returns all proctor-issued warns and kicks — visible to proctors and teachers.
+route('get', '/api/proctor-actions', async (_req, res) => {
+  const rows = await q(`
+    SELECT pl.attempt_id, pl.event_type, pl.severity, pl.event_details,
+           pl.logged_at, u.full_name AS student_name, ex.title AS exam_title
+    FROM ProctorLogs pl
+    JOIN ExamAttempts ea ON pl.attempt_id = ea.attempt_id
+    JOIN Users u         ON ea.student_id = u.user_id
+    JOIN Exams ex        ON ea.exam_id    = ex.exam_id
+    WHERE pl.event_type IN ('IDLE_WARNING', 'PROCTOR_KICK')
+    ORDER BY pl.logged_at DESC`
+  );
+  const actions = rows.map(r => ({
+    type:     r.event_type === 'PROCTOR_KICK' ? 'kick' : 'warn',
+    label:    r.event_type === 'PROCTOR_KICK' ? 'Removed' : 'Warned',
+    color:    r.event_type === 'PROCTOR_KICK' ? 'var(--red)' : 'var(--yellow)',
+    student:  r.student_name,
+    exam:     r.exam_title,
+    message:  r.event_details,
+    severity: r.severity,
+    time:     new Date(r.logged_at).toLocaleString('en-IN', {
+                day: '2-digit', month: 'short', year: 'numeric',
+                hour: '2-digit', minute: '2-digit', hour12: false }),
+    attempt_id: r.attempt_id,
+  }));
+  res.json({ actions });
 });
+
+// ── Start ─────────────────────────────────────────────────────
+// Only listen when run directly (node server.js / npm start).
+// When required by tests, app is exported without listening.
+if (require.main === module) {
+  // ── Startup migrations ────────────────────────────────────────
+  (async () => {
+    // 1. Role ENUM: expand → migrate data → shrink
+    await pool.execute(`ALTER TABLE Users     MODIFY COLUMN role ENUM('student','instructor','proctor','teacher','admin') NOT NULL DEFAULT 'student'`).catch(() => {});
+    await pool.execute(`ALTER TABLE UserRoles MODIFY COLUMN role ENUM('student','instructor','proctor','teacher','admin') NOT NULL`).catch(() => {});
+    await pool.execute(`UPDATE Users     SET role='teacher' WHERE role IN ('proctor','instructor')`).catch(() => {});
+    await pool.execute(`UPDATE UserRoles SET role='teacher' WHERE role IN ('proctor','instructor')`).catch(() => {});
+    await pool.execute(`ALTER TABLE Users     MODIFY COLUMN role ENUM('student','teacher','admin') NOT NULL DEFAULT 'student'`).catch(() => {});
+    await pool.execute(`ALTER TABLE UserRoles MODIFY COLUMN role ENUM('student','teacher','admin') NOT NULL`).catch(() => {});
+
+    // 2. Questions: add option_e through option_j if not present
+    for (const col of ['option_e','option_f','option_g','option_h','option_i','option_j']) {
+      const [[ex]] = await pool.execute(
+        `SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='Questions' AND COLUMN_NAME=?`, [col]
+      ).catch(() => [[{ c: 1 }]]);
+      if (!ex.c) await pool.execute(`ALTER TABLE Questions ADD COLUMN ${col} VARCHAR(500) NULL`).catch(() => {});
+    }
+
+    // 3. correct_answer: make nullable so teachers can add questions without specifying the answer
+    await pool.execute(
+      `ALTER TABLE Questions MODIFY COLUMN correct_answer VARCHAR(500) NULL`
+    ).catch(() => {});
+
+    console.log('DB migrations applied.');
+  })();
+
+  app.listen(PORT, () => {
+    console.log(`\nExamProctor server running at http://localhost:${PORT}`);
+    console.log(`UI dashboard → http://localhost:${PORT}/index.html\n`);
+  });
+
+  // ── Auto-submit expired in_progress attempts every 60 s ───────
+  // If a student's browser closed without submitting, the server
+  // marks their attempt as 'timed_out' once duration_minutes elapses.
+  setInterval(async () => {
+    try {
+      const expired = await q(`
+        SELECT ea.attempt_id, e.total_marks
+        FROM ExamAttempts ea
+        JOIN Exams e ON ea.exam_id = e.exam_id
+        WHERE ea.status = 'in_progress'
+          AND DATE_ADD(ea.started_at, INTERVAL e.duration_minutes MINUTE) < NOW()`
+      );
+      for (const a of expired) {
+        const [[sr]] = await pool.query(
+          `SELECT COALESCE(SUM(marks_obtained), 0) AS total FROM StudentAnswers WHERE attempt_id = ?`,
+          [a.attempt_id]
+        );
+        const score = parseFloat(sr.total);
+        const pct   = Math.round((score / a.total_marks) * 10000) / 100;
+        await pool.execute(
+          `UPDATE ExamAttempts
+           SET score=?, percentage=?, status='timed_out', submitted_at=NOW(), auto_submitted=TRUE
+           WHERE attempt_id=? AND status='in_progress'`,
+          [score, pct, a.attempt_id]
+        );
+        await pool.execute(
+          `INSERT INTO ProctorLogs (attempt_id, event_type, severity, event_details)
+           VALUES (?, 'AUTO_SUBMITTED', 'INFO', 'Auto-submitted: time limit expired.')`,
+          [a.attempt_id]
+        );
+        console.log(`[auto-submit] attempt ${a.attempt_id} timed out → score ${score}/${a.total_marks}`);
+      }
+    } catch (e) {
+      console.error('[auto-submit] error:', e.message);
+    }
+  }, 60 * 1000);
+}
+
+module.exports = app;

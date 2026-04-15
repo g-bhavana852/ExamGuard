@@ -17,37 +17,37 @@ const PAGE_TITLES = {
 
 const NAV_SECTIONS = [
   { section: 'Overview', items: [
-    { id: 'dashboard',    icon: '📊', label: 'Dashboard'       },
-    { id: 'monitor',      icon: '👁️', label: 'Live Monitor'    },
+    { id: 'dashboard',    icon: '◈', label: 'Dashboard'       },
+    { id: 'monitor',      icon: '◉', label: 'Live Monitor'    },
   ]},
   { section: 'Exam', items: [
-    { id: 'exams',        icon: '📝', label: 'Exams'           },
-    { id: 'questions',    icon: '❓', label: 'Questions'       },
-    { id: 'student-view', icon: '🎓', label: 'Student View'    },
+    { id: 'exams',        icon: '▤', label: 'Exams'           },
+    { id: 'questions',    icon: '?', label: 'Questions'       },
+    { id: 'student-view', icon: '⊙', label: 'Student View'    },
   ]},
   { section: 'Proctoring', items: [
-    { id: 'flagged',      icon: '🚩', label: 'Flagged Attempts'},
-    { id: 'logs',         icon: '📋', label: 'Proctor Logs'    },
-    { id: 'analytics',    icon: '📈', label: 'Analytics'       },
+    { id: 'flagged',      icon: '⚑', label: 'Flagged Attempts'},
+    { id: 'logs',         icon: '≡', label: 'Proctor Logs'    },
+    { id: 'analytics',    icon: '≈', label: 'Analytics'       },
   ]},
   { section: 'System', items: [
-    { id: 'schema',       icon: '🗄️', label: 'DB Schema'       },
+    { id: 'schema',       icon: '⊞', label: 'DB Schema'       },
   ]},
 ];
 
 // ── Dashboard ─────────────────────────────────────────────────
 const DASHBOARD = {
   stats: [
-    { color: 'purple', icon: '📝', label: 'Total Exams',      value: 3, sub: '2 completed · 1 upcoming'     },
-    { color: 'green',  icon: '✅', label: 'Attempts Today',   value: 7, sub: '5 submitted · 2 in progress'  },
-    { color: 'yellow', icon: '⚠️', label: 'Open Flags',       value: 5, sub: '3 high · 2 medium severity'   },
-    { color: 'red',    icon: '🚨', label: 'Flagged Attempts', value: 2, sub: 'Ravi Shankar · Nikhil Desai'  },
+    { color: 'purple', icon: '▤', label: 'Total Exams',      value: 3, sub: '2 completed · 1 upcoming'     },
+    { color: 'green',  icon: '✓', label: 'Attempts Today',   value: 7, sub: '5 submitted · 2 in progress'  },
+    { color: 'yellow', icon: '!', label: 'Open Flags',       value: 5, sub: '3 high · 2 medium severity'   },
+    { color: 'red',    icon: '⚑', label: 'Flagged Attempts', value: 2, sub: 'Ravi Shankar · Nikhil Desai'  },
   ],
   alerts: [
-    { type: 'red',    icon: '🔴', name: 'Nikhil Desai', msg: 'Suspicion score 88/100. Multiple logins detected from 2 different IPs during DBMS Mid-Term.',       action: { label: 'Review',    page: 'flagged' } },
-    { type: 'red',    icon: '🔴', name: 'Ravi Shankar', msg: '8 tab switches + 4 copy-paste events. Rapid answering (avg 7s/question). Score 48/50 suspicious.', action: { label: 'View Logs', page: 'logs'    } },
-    { type: 'yellow', icon: '🟡', name: 'Isha Trivedi', msg: 'Face not detected 3 times. Exam auto-submitted at 60-minute mark.',                                 action: null },
-    { type: 'green',  icon: '🟢', name: 'Arjun Kumar',  msg: 'Exam completed cleanly. Score 45/50 (90%). No suspicious events.',                                 action: null },
+    { type: 'red',    name: 'Nikhil Desai', msg: 'Suspicion score 88/100. Multiple logins detected from 2 different IPs during DBMS Mid-Term.',       action: { label: 'Review',    page: 'flagged' } },
+    { type: 'red',    name: 'Ravi Shankar', msg: '8 tab switches + 4 copy-paste events. Rapid answering (avg 7s/question). Score 48/50 suspicious.', action: { label: 'View Logs', page: 'logs'    } },
+    { type: 'yellow', name: 'Isha Trivedi', msg: 'Exam auto-submitted at 60-minute mark.',                                                            action: null },
+    { type: 'green',  name: 'Arjun Kumar',  msg: 'Exam completed cleanly. Score 45/50 (90%). No suspicious events.',                                 action: null },
   ],
   funnel: [
     { label: 'Enrolled',           value: '10',               pct: 100, fill: 'fill-purple' },
@@ -80,32 +80,32 @@ const MONITOR = {
   students: [
     { status: 'clean',   name: 'Arjun Kumar', answered: '7/10',  elapsed: 32, timeLeft: '88 min left', timerPct: 27, timerFill: 'fill-green',
       suspicion: 0,  suspColor: 'var(--green)',
-      indicators: [{ cls: 'ind-clean', text: '✅ Clean' }], note: '' },
+      indicators: [{ cls: 'ind-clean', text: 'Clean' }], note: '' },
     { status: 'flagged', name: 'Ravi Shankar', answered: '10/10', elapsed: 22, timeLeft: '98 min left', timerPct: 18, timerFill: 'fill-red',
       suspicion: 72, suspColor: 'var(--red)',
-      indicators: [{ cls: 'ind-tab', text: '⇄ 8 Tab Switches' }, { cls: 'ind-paste', text: '📋 4 Copy-Paste' }, { cls: 'ind-face', text: '😶 Face Gone 2×' }], note: '' },
+      indicators: [{ cls: 'ind-tab', text: '8 Tab Switches' }, { cls: 'ind-paste', text: '4 Copy-Paste' }], note: '' },
     { status: 'warning', name: 'Priya Menon',  answered: '5/10',  elapsed: 45, timeLeft: '75 min left', timerPct: 38, timerFill: 'fill-yellow',
       suspicion: 5,  suspColor: 'var(--yellow)',
-      indicators: [{ cls: 'ind-tab', text: '⇄ 1 Tab Switch' }, { cls: '', text: '🖥️ Fullscreen Exit 1×', style: 'background:rgba(100,116,139,0.15);color:var(--text3)' }], note: '' },
+      indicators: [{ cls: 'ind-tab', text: '1 Tab Switch' }, { cls: '', text: 'Fullscreen Exit 1x', style: 'background:rgba(100,116,139,0.15);color:var(--text3)' }], note: '' },
     { status: 'warning', name: 'Isha Trivedi', answered: '4/10',  elapsed: 58, timeLeft: '2 min left',  timerPct: 97, timerFill: 'fill-red',
       suspicion: 10, suspColor: 'var(--orange)',
-      indicators: [{ cls: 'ind-face', text: '😶 Face Not Detected 3×' }], note: '· Will auto-submit soon' },
+      indicators: [{ cls: 'ind-tab', text: 'Timed Out Warning' }], note: '· Will auto-submit soon' },
     { status: 'flagged', name: 'Nikhil Desai', answered: '10/10', elapsed: 41, timeLeft: '79 min left', timerPct: 34, timerFill: 'fill-red',
       suspicion: 88, suspColor: 'var(--red)',
-      indicators: [{ cls: 'ind-paste', text: '🔴 Multi-Login' }, { cls: 'ind-face', text: '🔴 DevTools' }, { cls: 'ind-tab', text: '🟠 IP Changed' }], note: '— FLAGGED' },
+      indicators: [{ cls: 'ind-paste', text: 'Multi-Login' }, { cls: 'ind-paste', text: 'DevTools' }, { cls: 'ind-tab', text: 'IP Changed' }], note: '— FLAGGED' },
     { status: 'clean',   name: 'Ananya Bose',  answered: '6/10',  elapsed: 38, timeLeft: '82 min left', timerPct: 32, timerFill: 'fill-green',
       suspicion: 0,  suspColor: 'var(--green)',
-      indicators: [{ cls: 'ind-clean', text: '✅ Clean' }], note: '' },
+      indicators: [{ cls: 'ind-clean', text: 'Clean' }], note: '' },
   ],
 };
 
 // ── Flagged Attempts ──────────────────────────────────────────
 const FLAGGED = {
   attempts: [
-    { name: 'Nikhil Desai', email: 'nikhil.d@student.edu', statusBadge: 'badge-red',    statusText: '🚩 Flagged',   suspicion: 88, suspColor: 'var(--red)',    tabs: 12, tabColor: 'var(--yellow)', paste: 6, pasteColor: 'var(--red)',    face: 0, faceColor: 'var(--orange)', score: '50/50', scoreBadge: 'badge-yellow', scoreText: 'Suspicious',   openFlags: '2 open', flagBadge: 'badge-red',  logPage: 'logs' },
-    { name: 'Ravi Shankar', email: 'ravi.s@student.edu',   statusBadge: 'badge-red',    statusText: '🚩 Flagged',   suspicion: 72, suspColor: 'var(--orange)', tabs:  8, tabColor: 'var(--red)',    paste: 4, pasteColor: 'var(--red)',    face: 0, faceColor: 'var(--text3)', score: '48/50', scoreBadge: 'badge-yellow', scoreText: 'Under Review', openFlags: '3 open', flagBadge: 'badge-red',  logPage: 'logs' },
-    { name: 'Isha Trivedi', email: 'isha.t@student.edu',   statusBadge: 'badge-yellow', statusText: '⏱ Timed Out', suspicion: 10, suspColor: 'var(--yellow)', tabs:  1, tabColor: 'var(--text3)', paste: 0, pasteColor: 'var(--text3)', face: 3, faceColor: 'var(--orange)', score: '20/50', scoreBadge: 'badge-red',    scoreText: 'Fail',         openFlags: '0 open', flagBadge: 'badge-gray', logPage: 'logs' },
-    { name: 'Priya Menon',  email: 'priya.m@student.edu',  statusBadge: 'badge-green',  statusText: '✓ Submitted',  suspicion:  5, suspColor: 'var(--yellow)', tabs:  1, tabColor: 'var(--text3)', paste: 0, pasteColor: 'var(--text3)', face: 0, faceColor: 'var(--text3)', score: '40/50', scoreBadge: 'badge-green',  scoreText: 'Pass',         openFlags: '0 open', flagBadge: 'badge-gray', logPage: null  },
+    { name: 'Nikhil Desai', email: 'nikhil.d@student.edu', statusBadge: 'badge-red',    statusText: 'Flagged',    suspicion: 88, suspColor: 'var(--red)',    tabs: 12, tabColor: 'var(--yellow)', paste: 6, pasteColor: 'var(--red)',    score: '50/50', scoreBadge: 'badge-yellow', scoreText: 'Suspicious',   openFlags: '2 open', flagBadge: 'badge-red',  logPage: 'logs' },
+    { name: 'Ravi Shankar', email: 'ravi.s@student.edu',   statusBadge: 'badge-red',    statusText: 'Flagged',    suspicion: 72, suspColor: 'var(--orange)', tabs:  8, tabColor: 'var(--red)',    paste: 4, pasteColor: 'var(--red)',    score: '48/50', scoreBadge: 'badge-yellow', scoreText: 'Under Review', openFlags: '3 open', flagBadge: 'badge-red',  logPage: 'logs' },
+    { name: 'Isha Trivedi', email: 'isha.t@student.edu',   statusBadge: 'badge-yellow', statusText: 'Timed Out',  suspicion: 10, suspColor: 'var(--yellow)', tabs:  1, tabColor: 'var(--text3)', paste: 0, pasteColor: 'var(--text3)', score: '20/50', scoreBadge: 'badge-red',    scoreText: 'Fail',         openFlags: '0 open', flagBadge: 'badge-gray', logPage: 'logs' },
+    { name: 'Priya Menon',  email: 'priya.m@student.edu',  statusBadge: 'badge-green',  statusText: 'Submitted',  suspicion:  5, suspColor: 'var(--yellow)', tabs:  1, tabColor: 'var(--text3)', paste: 0, pasteColor: 'var(--text3)', score: '40/50', scoreBadge: 'badge-green',  scoreText: 'Pass',         openFlags: '0 open', flagBadge: 'badge-gray', logPage: null  },
   ],
   flags: [
     { id: '#5', student: 'Nikhil Desai', type: 'HIGH_SUSPICION_SCORE',   badge: 'badge-red',    desc: 'Suspicion score 88/100. Multiple critical events.',    time: 'Nov 10, 09:40', resolved: false, resolvedBy: null       },
@@ -124,12 +124,12 @@ const LOGS = {
     { dot: 'info',   icon: '▶',  title: 'EXAM_STARTED',                        detail: 'Exam started from IP 192.168.1.103',                         time: '09:08' },
     { dot: 'medium', icon: '⇄',  title: 'TAB_SWITCH #1',                       detail: 'Student left exam tab',                                      time: '09:10' },
     { dot: 'medium', icon: '⇄',  title: 'TAB_SWITCH #2',                       detail: 'Student left exam tab',                                      time: '09:12' },
-    { dot: 'high',   icon: '📋', title: 'COPY_PASTE_DETECTED',                 detail: 'Ctrl+V detected in answer field — Q2',                       time: '09:14' },
-    { dot: 'high',   icon: '📋', title: 'COPY_PASTE_DETECTED',                 detail: 'Paste attempt on Q5',                                        time: '09:22' },
-    { dot: 'high',   icon: '⚡', title: 'RAPID_ANSWERING',                     detail: 'All 10 answers submitted in under 90 seconds (avg 7s/Q)',    time: '09:30' },
-    { dot: 'medium', icon: '⇄',  title: 'TAB_SWITCH #6 — Threshold Exceeded',  detail: 'Auto-flag raised for EXCESSIVE_TAB_SWITCHES',               time: '09:42' },
-    { dot: 'high',   icon: '📋', title: 'COPY_PASTE_DETECTED #4 — Abuse Flag', detail: 'Auto-flag raised for COPY_PASTE_ABUSE',                      time: '09:45' },
-    { dot: 'info',   icon: '✅', title: 'EXAM_SUBMITTED',                      detail: 'Exam submitted. Score: 48/50. Suspicion: 72/100.',           time: '10:02' },
+    { dot: 'high',   icon: 'CP', title: 'COPY_PASTE_DETECTED',                 detail: 'Ctrl+V detected in answer field — Q2',                       time: '09:14' },
+    { dot: 'high',   icon: 'CP', title: 'COPY_PASTE_DETECTED',                 detail: 'Paste attempt on Q5',                                        time: '09:22' },
+    { dot: 'high',   icon: 'RQ', title: 'RAPID_ANSWERING',                     detail: 'All 10 answers submitted in under 90 seconds (avg 7s/Q)',    time: '09:30' },
+    { dot: 'medium', icon: '<>', title: 'TAB_SWITCH #6 — Threshold Exceeded',  detail: 'Auto-flag raised for EXCESSIVE_TAB_SWITCHES',               time: '09:42' },
+    { dot: 'high',   icon: 'CP', title: 'COPY_PASTE_DETECTED #4 — Abuse Flag', detail: 'Auto-flag raised for COPY_PASTE_ABUSE',                      time: '09:45' },
+    { dot: 'info',   icon: 'OK', title: 'EXAM_SUBMITTED',                      detail: 'Exam submitted. Score: 48/50. Suspicion: 72/100.',           time: '10:02' },
   ],
   risk: {
     score: 72, totalEvents: 17, duration: '54 min',
@@ -148,7 +148,7 @@ const STUDENT_VIEW = {
   exams: [
     { title: 'DBMS Mid-Term Examination',      course: 'CS301 · Database Management Systems',   statusBadge: 'badge-green',  statusText: '✓ Submitted', marks: 50,  duration: '60 min',  questions: '10 Q',    scoreLine: '45/50 (90%) · PASS', scoreColor: 'var(--green)', pct: 90, fill: 'fill-green', action: { label: 'View Results', cls: 'btn-outline', page: 'results' } },
     { title: 'DSA Weekly Quiz — Trees & Graphs',course: 'CS201 · Data Structures & Algorithms', statusBadge: 'badge-green',  statusText: '✓ Submitted', marks: 20,  duration: '30 min',  questions: '10 Q',    scoreLine: '18/20 (90%) · PASS', scoreColor: 'var(--green)', pct: 90, fill: 'fill-green', action: { label: 'View Results', cls: 'btn-outline', page: null    } },
-    { title: 'DBMS End-Term Examination',      course: 'CS301 · Database Management Systems',   statusBadge: 'badge-purple', statusText: '📅 Upcoming', marks: 100, duration: '120 min', questions: '1 Attempt', note: 'Window: Apr 1, 2026 · 09:00 – 14:00',                                          action: { label: 'Start Exam',   cls: 'btn-primary', page: null    } },
+    { title: 'DBMS End-Term Examination',      course: 'CS301 · Database Management Systems',   statusBadge: 'badge-purple', statusText: 'Upcoming',   marks: 100, duration: '120 min', questions: '1 Attempt', note: 'Window: Apr 1, 2026 · 09:00 – 14:00',                                          action: { label: 'Start Exam',   cls: 'btn-primary', page: null    } },
   ],
 };
 
@@ -168,11 +168,11 @@ const ANALYTICS = {
     { q: 'Q8', topic: 'ACID Durability',     pct: '100%', pctColor: 'var(--green)',  time: '20s', badge: 'badge-green',  rating: 'Too Easy' },
   ],
   ranking: [
-    { rank: '#1', name: 'Arjun Kumar',  flag: false, pct: '90%',  pctColor: 'var(--green)',  passBadge: 'badge-green',  passText: '✓', susp:  0, suspColor: 'var(--green)'  },
-    { rank: '#2', name: 'Priya Menon',  flag: false, pct: '80%',  pctColor: 'var(--green)',  passBadge: 'badge-green',  passText: '✓', susp:  5, suspColor: 'var(--green)'  },
-    { rank: '#3', name: 'Ravi Shankar', flag: true,  pct: '96%',  pctColor: 'var(--yellow)', passBadge: 'badge-yellow', passText: '?', susp: 72, suspColor: 'var(--red)'    },
-    { rank: '#4', name: 'Isha Trivedi', flag: false, pct: '40%',  pctColor: 'var(--red)',    passBadge: 'badge-red',    passText: '✗', susp: 10, suspColor: 'var(--yellow)' },
-    { rank: '#5', name: 'Nikhil Desai', flag: true,  pct: '100%', pctColor: 'var(--yellow)', passBadge: 'badge-yellow', passText: '?', susp: 88, suspColor: 'var(--red)'    },
+    { rank: '#1', name: 'Arjun Kumar',  flag: false, pct: '90%',  pctColor: 'var(--green)',  passBadge: 'badge-green',  passText: 'Pass', susp:  0, suspColor: 'var(--green)'  },
+    { rank: '#2', name: 'Priya Menon',  flag: false, pct: '80%',  pctColor: 'var(--green)',  passBadge: 'badge-green',  passText: 'Pass', susp:  5, suspColor: 'var(--green)'  },
+    { rank: '#3', name: 'Ravi Shankar', flag: true,  pct: '96%',  pctColor: 'var(--yellow)', passBadge: 'badge-yellow', passText: '?',    susp: 72, suspColor: 'var(--red)'    },
+    { rank: '#4', name: 'Isha Trivedi', flag: false, pct: '40%',  pctColor: 'var(--red)',    passBadge: 'badge-red',    passText: 'Fail', susp: 10, suspColor: 'var(--yellow)' },
+    { rank: '#5', name: 'Nikhil Desai', flag: true,  pct: '100%', pctColor: 'var(--yellow)', passBadge: 'badge-yellow', passText: '?',    susp: 88, suspColor: 'var(--red)'    },
   ],
 };
 

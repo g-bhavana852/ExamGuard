@@ -8,14 +8,37 @@
 let currentUser  = null;   // { user_id, full_name, email, username, role, roles[] }
 let sessionToken = null;   // LoginSessions.session_token
 
+// Persist session across page reloads
+function saveSession()  {
+  localStorage.setItem('eg_token', sessionToken || '');
+  localStorage.setItem('eg_user',  currentUser ? JSON.stringify(currentUser) : '');
+}
+function clearSession() {
+  localStorage.removeItem('eg_token');
+  localStorage.removeItem('eg_user');
+}
+function restoreSession() {
+  const tok = localStorage.getItem('eg_token');
+  const usr = localStorage.getItem('eg_user');
+  if (tok && usr) {
+    try {
+      sessionToken = tok;
+      currentUser  = JSON.parse(usr);
+      return true;
+    } catch { /* corrupt storage — ignore */ }
+  }
+  return false;
+}
+
 // ── Page metadata ─────────────────────────────────────────────
 const PAGE_TITLES = {
+  classroom:      'Exam Session',
   dashboard:      'Dashboard',
   monitor:        'Live Monitor',
   courses:        'Courses',
-  exams:          'Exams',
+  exams:          'My Exams',
   questions:      'Question Bank',
-  'student-view': 'My Exams',
+  'student-view': 'My Results',
   flagged:        'Flagged Attempts',
   logs:           'Proctor Logs',
   analytics:      'Analytics',
@@ -25,32 +48,38 @@ const PAGE_TITLES = {
 
 // Which roles can see each page. Admin always sees everything.
 const PAGE_ROLES = {
-  dashboard:      ['admin'],
-  monitor:        ['admin', 'proctor'],
-  courses:        ['admin', 'instructor'],
-  exams:          ['admin', 'instructor'],
-  questions:      ['admin', 'instructor'],
+  classroom:      ['admin', 'proctor', 'instructor', 'teacher', 'student'],
+  dashboard:      ['admin', 'proctor', 'instructor', 'teacher'],
+  monitor:        ['admin', 'proctor', 'instructor', 'teacher'],
+  courses:        ['admin', 'instructor', 'teacher'],
+  exams:          ['admin', 'instructor', 'teacher'],
+  questions:      ['admin', 'instructor', 'teacher'],
   'student-view': ['student'],
-  flagged:        ['admin', 'proctor'],
-  logs:           ['admin', 'proctor'],
-  analytics:      ['admin', 'instructor'],
+  flagged:        ['admin', 'proctor', 'instructor', 'teacher'],
+  logs:           ['admin', 'proctor', 'instructor', 'teacher'],
+  analytics:      ['admin', 'instructor', 'teacher'],
   schema:         ['admin'],
-  results:        ['admin', 'instructor', 'student'],
+  results:        ['admin', 'instructor', 'teacher', 'student'],
 };
 
-// All possible nav items — filtered per-role at login time
+// Nav items — teacher gets a focused set; student gets a minimal set; admin gets everything
 const ALL_NAV = [
-  { section: 'Overview',   id: 'dashboard',    icon: '◈', label: 'Dashboard'        },
-  { section: 'Overview',   id: 'monitor',      icon: '◉', label: 'Live Monitor'     },
-  { section: 'Manage',     id: 'courses',      icon: '◧', label: 'Courses'          },
-  { section: 'Manage',     id: 'exams',        icon: '▤', label: 'Exams'            },
-  { section: 'Manage',     id: 'questions',    icon: '?', label: 'Questions'        },
-  { section: 'Manage',     id: 'student-view', icon: '⊙', label: 'My Exams'        },
-  { section: 'Proctoring', id: 'flagged',      icon: '⚑', label: 'Flagged Attempts' },
-  { section: 'Proctoring', id: 'logs',         icon: '≡', label: 'Proctor Logs'     },
-  { section: 'Proctoring', id: 'analytics',    icon: '≈', label: 'Analytics'        },
-  { section: 'System',     id: 'schema',       icon: '⊞', label: 'DB Schema'        },
-  { section: 'System',     id: 'results',      icon: '★', label: 'Exam Results'     },
+  // Teacher / Admin core flow
+  { section: 'Exams',    id: 'classroom',    icon: '▣', label: 'Exam Session',    roles: ['teacher','instructor','proctor','admin'] },
+  { section: 'Exams',    id: 'exams',        icon: '▤', label: 'My Exams',        roles: ['teacher','instructor','admin'] },
+  { section: 'Exams',    id: 'questions',    icon: '?', label: 'Question Bank',   roles: ['teacher','instructor','admin'] },
+  { section: 'Exams',    id: 'results',      icon: '★', label: 'Results',         roles: ['teacher','instructor','admin'] },
+  // Student flow
+  { section: 'Exams',    id: 'classroom',    icon: '▣', label: 'Exam Session',    roles: ['student'] },
+  { section: 'My',       id: 'student-view', icon: '★', label: 'My Results',      roles: ['student'] },
+  // Admin extras
+  { section: 'Review',   id: 'flagged',      icon: '⚑', label: 'Flagged',         roles: ['admin','teacher','instructor','proctor'] },
+  { section: 'Review',   id: 'logs',         icon: '≡', label: 'Proctor Logs',    roles: ['admin','teacher','instructor','proctor'] },
+  { section: 'Review',   id: 'analytics',    icon: '≈', label: 'Analytics',       roles: ['admin','teacher','instructor'] },
+  { section: 'System',   id: 'dashboard',    icon: '◈', label: 'Dashboard',       roles: ['admin'] },
+  { section: 'System',   id: 'monitor',      icon: '◉', label: 'Live Monitor',    roles: ['admin'] },
+  { section: 'System',   id: 'courses',      icon: '◧', label: 'Courses',         roles: ['admin'] },
+  { section: 'System',   id: 'schema',       icon: '⊞', label: 'DB Schema',       roles: ['admin'] },
 ];
 
 // ── Role helpers ──────────────────────────────────────────────
@@ -59,14 +88,26 @@ function canAccess(pageId) { return !!(currentUser?.roles?.some(r => PAGE_ROLES[
 
 // First accessible page for the logged-in user (used for logo click / default route)
 function defaultPage() {
-  if (!currentUser) return 'dashboard';
-  const order = ['student-view','dashboard','monitor','courses','exams','results'];
-  return order.find(p => canAccess(p)) || 'dashboard';
+  if (!currentUser) return 'classroom';
+  const r = currentUser.role;
+  if (r === 'student') return 'classroom';
+  if (r === 'teacher' || r === 'instructor') return 'exams';
+  return 'exams'; // admin/proctor → exams
 }
 
-// Build NAV_SECTIONS filtered to what the current user can see
+// Build NAV_SECTIONS filtered to what the current user can see.
+// Nav items with a `roles` field are only shown if the user has that role.
+// Deduplicates page IDs so the same page isn't listed twice.
 function buildNavSections() {
-  const visible = ALL_NAV.filter(item => canAccess(item.id));
+  const seen = new Set();
+  const visible = ALL_NAV.filter(item => {
+    if (seen.has(item.id)) return false;
+    const allowed = item.roles
+      ? (currentUser?.roles || []).some(r => item.roles.includes(r))
+      : canAccess(item.id);
+    if (allowed) seen.add(item.id);
+    return allowed;
+  });
   const sections = [];
   for (const item of visible) {
     let sec = sections.find(s => s.section === item.section);
@@ -105,6 +146,7 @@ function showPage(id) {
 function refreshPage() {
   if (!_currentPage || _currentPage === 'monitor') return; // monitor auto-refreshes via SSE
   const builders = {
+    classroom: buildClassroom,
     dashboard: buildDashboard, courses: buildCourses, exams: buildExams,
     questions: buildQuestions, flagged: buildFlagged, logs: buildLogs,
     'student-view': buildStudentView, analytics: buildAnalytics,
@@ -120,8 +162,26 @@ function authHeaders(extra = {}) {
   return h;
 }
 
+// If any authenticated request gets 401, the stored token is stale (DB reset,
+// session expired, etc.). Clear it and return to the login screen immediately.
+function handle401() {
+  clearSession();
+  currentUser      = null;
+  sessionToken     = null;
+  currentAttemptId = null;
+  if (examState?.timerInterval) clearInterval(examState.timerInterval);
+  examState = null;
+  stopWarningPolling();
+  const loginBtn = document.getElementById('login-btn');
+  if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Sign In'; }
+  document.getElementById('login-error').textContent = '';
+  switchAuthTab('login');
+  document.getElementById('login-overlay').classList.add('active');
+}
+
 async function api(path) {
   const res = await fetch(path, { headers: authHeaders() });
+  if (res.status === 401) { handle401(); throw new Error('Session expired — please sign in again'); }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -132,14 +192,32 @@ async function apiPost(path, data) {
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(data),
   });
+  if (res.status === 401) { handle401(); throw new Error('Session expired — please sign in again'); }
   if (!res.ok) throw new Error(await apiErrMsg(res));
   return res.json();
 }
 
 async function apiDelete(path) {
   const res = await fetch(path, { method: 'DELETE', headers: authHeaders() });
+  if (res.status === 401) { handle401(); throw new Error('Session expired — please sign in again'); }
   if (!res.ok) throw new Error(await apiErrMsg(res));
   return res.json();
+}
+
+// ── Password show/hide toggle ─────────────────────────────────
+function togglePw(inputId, btn) {
+  const input = document.getElementById(inputId);
+  const show  = input.type === 'password';
+  input.type  = show ? 'text' : 'password';
+  btn.innerHTML = show
+    ? `<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+        <line x1="1" y1="1" x2="23" y2="23"/>
+       </svg>`
+    : `<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+       </svg>`;
 }
 
 // ── Auth tab toggle ───────────────────────────────────────────
@@ -153,11 +231,8 @@ function switchAuthTab(tab) {
   document.getElementById('signup-error').textContent = '';
 }
 
-// Show "Also a Proctor" checkbox only when Teacher is selected
-function onRoleChange(radio) {
-  document.getElementById('also-proctor-wrap')
-    .classList.toggle('hidden', radio.value !== 'instructor');
-}
+// onRoleChange kept for backward compat but no longer needed
+function onRoleChange(_radio) {}
 
 // ── Login / Logout ────────────────────────────────────────────
 async function doLogin(e) {
@@ -182,6 +257,7 @@ async function doLogin(e) {
       roles:     data.roles,   // array — may include extra roles
     };
     sessionToken = data.token;
+    saveSession();
     onLoginSuccess();
   } catch (err) {
     errEl.textContent = err.message;
@@ -199,8 +275,6 @@ async function doSignup(e) {
 
   const primaryRole = form.role.value;
   const roles = [primaryRole];
-  if (primaryRole === 'instructor' && form.also_proctor && form.also_proctor.checked)
-    roles.push('proctor');
 
   try {
     await apiPost('/api/signup', {
@@ -223,24 +297,43 @@ async function doSignup(e) {
       roles:     data.roles,
     };
     sessionToken = data.token;
+    saveSession();
     onLoginSuccess();
   } catch (err) {
-    errEl.textContent = err.message;
+    // handle401() may have cleared the UI — only show error if still on signup screen
+    if (document.getElementById('signup-error')) {
+      errEl.textContent = err.message;
+    }
     btn.disabled = false; btn.textContent = 'Create Account';
   }
 }
 
 async function doLogout() {
   if (sessionToken) {
-    fetch('/api/logout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: sessionToken }),
-    }).catch(() => {});
+    apiPost('/api/logout', { token: sessionToken }).catch(() => {});
   }
+  // Clear any in-progress exam state so the next user doesn't see stale data
+  if (examState?.timerInterval) clearInterval(examState.timerInterval);
+  examState        = null;
   currentUser      = null;
   sessionToken     = null;
   currentAttemptId = null;
+  clearSession();
+  stopWarningPolling();
+
+  // Reset login form — clear fields, re-enable button, switch to Sign In tab
+  const loginForm = document.getElementById('login-form');
+  if (loginForm) loginForm.reset();
+  const signupForm = document.getElementById('signup-form');
+  if (signupForm) signupForm.reset();
+  const loginBtn = document.getElementById('login-btn');
+  if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Sign In'; }
+  const signupBtn = document.getElementById('signup-btn');
+  if (signupBtn) { signupBtn.disabled = false; signupBtn.textContent = 'Create Account'; }
+  document.getElementById('login-error').textContent  = '';
+  document.getElementById('signup-error').textContent = '';
+  switchAuthTab('login');
+
   document.getElementById('login-overlay').classList.add('active');
 }
 
@@ -276,14 +369,16 @@ function updateUserCard() {
 function updateTopbar() {
   if (!currentUser) return;
   let btns = '';
-  if (hasRole('instructor') || hasRole('admin')) {
+  if (hasRole('instructor') || hasRole('teacher') || hasRole('admin')) {
     btns += `<button type="button" class="btn btn-primary" onclick="showCreateExamModal()">+ New Exam</button>`;
-    btns += `<button type="button" class="btn btn-outline" onclick="showCreateCourseModal()">+ Course</button>`;
   }
-  if (hasRole('admin'))
+  if (hasRole('admin')) {
+    btns += `<button type="button" class="btn btn-outline" onclick="showCreateCourseModal()">+ Course</button>`;
     btns += `<button type="button" class="btn btn-outline" onclick="window.location='/api/export'">Export</button>`;
+  }
   document.getElementById('topbar-actions').innerHTML =
-    `<span class="topbar-status" id="topbar-status">● ExamGuard</span>${btns}`;
+    `<button type="button" id="topbar-refresh-btn" class="btn btn-outline btn-refresh" onclick="refreshPage()" title="Refresh">Refresh</button>
+     <span class="topbar-status" id="topbar-status">● ExamGuard</span>${btns}`;
 }
 
 // Parse error body safely — server may occasionally return HTML (e.g. Express
@@ -341,7 +436,7 @@ function buildDashboard() {
         <div class="card-body" style="padding:16px">${renderAlerts(d.alerts)}</div>
       </div></div>
       <div><div class="card">
-        <div class="card-header"><span class="card-title">Exam Funnel — DBMS Mid-Term</span></div>
+        <div class="card-header"><span class="card-title">Exam Funnel — ${esc(d.examTitle)}</span></div>
         <div class="card-body">
           <div style="display:flex;flex-direction:column;gap:14px">${renderFunnel(d.funnel)}</div>
         </div>
@@ -349,7 +444,7 @@ function buildDashboard() {
     </div>
     <div class="card">
       <div class="card-header">
-        <span class="card-title">Score Distribution — DBMS Mid-Term</span>
+        <span class="card-title">Score Distribution — ${esc(d.examTitle)}</span>
         <span class="topbar-status">Q03 Analytical Query</span>
       </div>
       <div class="card-body">${renderScoreChart(d.scoreChart)}</div>
@@ -444,17 +539,38 @@ function buildMonitor() {
   };
 }
 
-function buildFlagged() {
-  return buildPage('flagged', '/api/flagged', d => {
-    const flagged    = d.attempts.filter(a => a.statusText.includes('Flagged')).length;
-    const timedOut   = d.attempts.filter(a => a.statusText.includes('Timed')).length;
-    const unresolved = d.flags.filter(f => !f.resolved).length;
+async function buildFlagged(sort = 'suspicion') {
+  const container = document.getElementById('page-flagged');
+  container.innerHTML = loadingHtml();
+  try {
+    const d = await api(`/api/flagged?sort=${sort}`);
+    const flagged    = d.attempts.filter(a => a.statusBadge === 'badge-red').length;
+    const timedOut   = d.attempts.filter(a => a.statusText  === 'Timed Out').length;
     const live       = d.attempts.filter(a => a.isLive).length;
-    return `
-      <div style="margin-bottom:20px">
-        <p style="color:var(--text3);font-size:13px">All exams · sorted by suspicion score (Q02). ${live > 0 ? `<span style="color:var(--red)">${live} currently in-progress.</span>` : ''}</p>
+    const unresolved = d.flags.filter(f => !f.resolved).length;
+
+    const SORT_LABELS = {
+      suspicion:  'Suspicion Score',
+      tabs:       'Tab Switches',
+      paste:      'Copy-Paste',
+      fullscreen: 'Fullscreen Exits',
+      rapid:      'Rapid Answering',
+      composite:  'Composite Risk',
+    };
+    const sortOptions = Object.entries(SORT_LABELS).map(([v, l]) =>
+      `<option value="${v}" ${v === sort ? 'selected' : ''}>${l}</option>`
+    ).join('');
+
+    container.innerHTML = `
+      <div style="margin-bottom:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:13px;color:var(--text3)">Sort by:</label>
+        <select style="background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px"
+          onchange="buildFlagged(this.value)">
+          ${sortOptions}
+        </select>
+        <span style="font-size:12px;color:var(--text3)">${d.attempts.length} students · ${live > 0 ? `<span style="color:var(--red)">${live} live now</span>` : '0 live'}</span>
       </div>
-      <div class="card">
+      <div class="card" style="margin-bottom:20px">
         <div class="card-header">
           <span class="card-title">Suspicious &amp; Flagged Attempts</span>
           <div style="display:flex;gap:8px">
@@ -472,51 +588,330 @@ function buildFlagged() {
         </div>
         ${renderFlagsTable(d.flags)}
       </div>`;
-  });
+  } catch (err) {
+    container.innerHTML = errorHtml('flagged attempts', err.message);
+  }
 }
 
-function buildLogs() {
-  return buildPage('logs', '/api/logs', d => `
-    <div style="margin-bottom:20px;display:flex;gap:12px;align-items:center">
-      <span class="topbar-status">Showing:</span>
-      <span class="badge badge-red">${esc(d.badge)}</span>
-    </div>
-    <div class="two-col">
-      <div class="card" style="margin-bottom:0">
+async function buildLogs(attemptId = null) {
+  const container = document.getElementById('page-logs');
+  container.innerHTML = loadingHtml();
+  try {
+    const url = attemptId ? `/api/logs?attempt_id=${attemptId}` : '/api/logs';
+    const [logsData, actionsData] = await Promise.all([
+      api(url),
+      api('/api/proctor-actions'),
+    ]);
+    const d = logsData;
+    const a = actionsData;
+
+    const selectorOptions = (d.allAttempts || []).map(at =>
+      `<option value="${at.attempt_id}" ${at.attempt_id === d.attemptId ? 'selected' : ''}>${esc(at.label)}</option>`
+    ).join('');
+
+    container.innerHTML = `
+      <div class="card" style="margin-bottom:20px">
         <div class="card-header">
-          <span class="card-title">Proctor Event Timeline</span>
-          <span class="topbar-status">${d.risk.totalEvents} events · ${esc(d.risk.duration)}</span>
+          <span class="card-title">Proctor Actions</span>
+          <span class="badge badge-gray">${a.actions.length} total</span>
         </div>
-        ${renderTimeline(d.timeline)}
+        ${renderProctorActions(a.actions)}
       </div>
-      <div><div class="card" style="margin-bottom:16px">
-        <div class="card-header"><span class="card-title">Risk Summary</span></div>
-        <div class="card-body" style="text-align:center">${renderRiskSummary(d.risk)}</div>
-      </div></div>
-    </div>`);
+      <div style="margin-bottom:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:13px;color:var(--text3)">Student attempt:</label>
+        <select id="logs-attempt-select" style="background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;min-width:280px"
+          onchange="buildLogs(parseInt(this.value))">
+          ${selectorOptions}
+        </select>
+      </div>
+      <div class="two-col">
+        <div class="card" style="margin-bottom:0">
+          <div class="card-header">
+            <span class="card-title">Event Timeline — ${esc(d.badge)}</span>
+            <span class="topbar-status">${d.risk.totalEvents} events · ${esc(d.risk.duration)}</span>
+          </div>
+          ${renderTimeline(d.timeline)}
+        </div>
+        <div><div class="card" style="margin-bottom:16px">
+          <div class="card-header"><span class="card-title">Risk Summary</span></div>
+          <div class="card-body" style="text-align:center">${renderRiskSummary(d.risk)}</div>
+        </div></div>
+      </div>`;
+  } catch (err) {
+    container.innerHTML = errorHtml('logs', err.message);
+  }
 }
 
 function buildStudentView() {
   const studentId = currentUser && currentUser.role === 'student' ? currentUser.user_id : null;
   const endpoint  = studentId ? `/api/student-view?student_id=${studentId}` : '/api/student-view';
-  return buildPage('student-view', endpoint, d => `
-    <div style="margin-bottom:4px;font-size:13px;color:var(--text3)">Logged in as: ${esc(d.label)}</div>
-    <div class="exam-grid" style="margin-bottom:24px">${renderExamCards(d.exams)}</div>`, true);
+  const container = document.getElementById('page-student-view');
+  container.innerHTML = loadingHtml();
+  api(endpoint).then(d => {
+    if (!d.exams || d.exams.length === 0) {
+      container.innerHTML = `
+        <div style="max-width:460px;margin:80px auto 0;text-align:center">
+          <div style="font-size:40px;margin-bottom:16px">★</div>
+          <div style="font-size:22px;font-weight:700;margin-bottom:8px">No Exams Yet</div>
+          <div style="font-size:14px;color:var(--text3);margin-bottom:24px;line-height:1.7">
+            You haven't taken any exams yet.<br>
+            Get a code from your teacher and <a href="#" onclick="showPage('classroom');return false" style="color:var(--accent2)">enter it here →</a>
+          </div>
+        </div>`;
+      return;
+    }
+    container.innerHTML = `
+      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${esc(d.label)}</div>
+      <div class="exam-grid">${renderExamCards(d.exams)}</div>`;
+    animateProgressBars();
+  }).catch(err => { container.innerHTML = errorHtml('my-results', err.message); });
 }
 
-function buildAnalytics() {
-  return buildPage('analytics', '/api/analytics', d => `
+// ── Classroom / Exam Session page ────────────────────────────
+// Teacher: shows active live exams with join codes and student lists
+// Student: enter join code to start exam
+async function buildClassroom() {
+  const container = document.getElementById('page-classroom');
+  container.innerHTML = loadingHtml();
+  try {
+    const role = currentUser?.role;
+    const isTeacher = role === 'proctor' || role === 'admin' || role === 'instructor' || role === 'teacher';
+
+    if (isTeacher) {
+      const d = await api('/api/classroom/active');
+      const sessions = d.classrooms || (d.classroom ? [d.classroom] : []);
+      if (sessions.length > 0) {
+        const sessionCards = sessions.map(c => `
+          <div style="display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start;margin-bottom:28px">
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title" style="font-size:14px">${esc(c.title)}</span>
+                <span class="badge badge-green" style="animation:pulse 2s infinite">● LIVE</span>
+              </div>
+              <div class="card-body" style="text-align:center;padding:24px 20px">
+                <div style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:10px">Student Exam Code</div>
+                <div id="code-display-${c.exam_id}" style="font-size:56px;font-weight:900;letter-spacing:12px;color:var(--accent2);font-family:monospace;line-height:1;margin-bottom:14px;cursor:pointer;user-select:all"
+                  title="Click to copy" onclick="copyCode('${esc(c.join_code)}')">${esc(c.join_code)}</div>
+                <div id="copy-hint-${c.exam_id}" style="font-size:11px;color:var(--text3);margin-bottom:16px">Click code to copy</div>
+                <div style="display:flex;justify-content:center;gap:20px;font-size:12px;color:var(--text3);margin-bottom:18px;flex-wrap:wrap">
+                  <span>⏱ ${c.duration_minutes} min</span>
+                  <span>📋 ${Math.round(c.total_marks)} marks</span>
+                  <span style="color:var(--green);font-weight:600">● ${c.live_count || 0} live</span>
+                  <span style="color:var(--text3)">${c.total_joined || 0} joined</span>
+                </div>
+                <div style="display:flex;gap:8px;justify-content:center">
+                  <button class="btn btn-outline" style="flex:1;font-size:12px" onclick="buildClassroom()">Refresh</button>
+                  <button class="btn" style="flex:1;font-size:12px;background:var(--red)" onclick="endClassroom(${c.exam_id})">End Session</button>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">Students in Session</span>
+                <span class="badge badge-gray">${c.total_joined || 0} joined</span>
+              </div>
+              <div id="classroom-live-list-${c.exam_id}" class="card-body" style="padding:16px">Loading…</div>
+            </div>
+          </div>`).join('');
+
+        container.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+            <div>
+              <div style="font-size:15px;font-weight:600">${sessions.length} active session${sessions.length > 1 ? 's' : ''}</div>
+              <div style="font-size:12px;color:var(--text3);margin-top:2px">Share the code with your students verbally or on the board</div>
+            </div>
+            <button class="btn btn-primary" style="font-size:13px" onclick="showPage('exams')">+ Open Another Exam</button>
+          </div>` + sessionCards;
+        sessions.forEach(c => loadClassroomLiveList(c.exam_id));
+      } else {
+        container.innerHTML = `
+          <div style="max-width:480px;margin:80px auto 0;text-align:center">
+            <div style="font-size:48px;margin-bottom:16px">▣</div>
+            <div style="font-size:22px;font-weight:700;margin-bottom:8px">No Active Exam Sessions</div>
+            <div style="font-size:14px;color:var(--text3);margin-bottom:28px;line-height:1.7">
+              Open an exam from <strong>My Exams</strong> to generate a unique code.<br>
+              Share the code with your students — they enter it to start.
+            </div>
+            <button class="btn btn-primary" style="font-size:15px;padding:12px 32px" onclick="showPage('exams')">
+              Go to My Exams
+            </button>
+          </div>`;
+      }
+    } else {
+      // Student — enter join code
+      container.innerHTML = `
+        <div style="max-width:420px;margin:60px auto 0">
+          <div class="card">
+            <div class="card-body" style="text-align:center;padding:44px 36px">
+              <div style="font-size:40px;margin-bottom:12px">▣</div>
+              <div style="font-size:24px;font-weight:700;margin-bottom:6px">Enter Exam Code</div>
+              <div style="font-size:13px;color:var(--text3);margin-bottom:28px;line-height:1.6">
+                Get the 6-character code from your teacher to begin your exam
+              </div>
+              <form onsubmit="joinClassroom(event)">
+                <input id="join-code-input" class="form-input"
+                  placeholder="ABC123"
+                  maxlength="6"
+                  style="font-size:32px;text-align:center;letter-spacing:10px;text-transform:uppercase;font-family:monospace;padding:16px;font-weight:700"
+                  oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'')"
+                  autocomplete="off" required>
+                <div id="join-error" style="color:var(--red);font-size:13px;margin-top:10px;min-height:20px"></div>
+                <button type="submit" id="join-btn" class="btn btn-primary btn-full" style="margin-top:14px;font-size:16px;padding:14px">
+                  Start Exam
+                </button>
+              </form>
+            </div>
+          </div>
+          <div style="margin-top:16px;text-align:center;font-size:12px;color:var(--text3)">
+            Already took an exam? <a href="#" onclick="showPage('student-view');return false" style="color:var(--accent2)">View My Results →</a>
+          </div>
+        </div>`;
+    }
+  } catch (err) {
+    container.innerHTML = errorHtml('classroom', err.message);
+  }
+}
+
+// Copy exam code to clipboard with feedback
+function copyCode(code) {
+  navigator.clipboard.writeText(code).then(() => {
+    // Show "Copied!" feedback on all code displays
+    document.querySelectorAll('[id^="copy-hint-"]').forEach(el => {
+      el.textContent = '✓ Copied to clipboard!';
+      el.style.color = 'var(--green)';
+      setTimeout(() => { el.textContent = 'Click code to copy'; el.style.color = 'var(--text3)'; }, 2000);
+    });
+  }).catch(() => {});
+}
+
+// Kept as legacy shim (classroom start form no longer used — teachers open exams from My Exams)
+function buildClassroomStartForm() { buildClassroom(); }
+
+async function loadClassroomLiveList(examId) {
+  try {
+    const rows = await api(`/api/monitor/exam/${examId}`);
+    const el = document.getElementById(`classroom-live-list-${examId}`);
+    if (!el) return;
+    if (!rows.students || rows.students.length === 0) {
+      el.innerHTML = '<p style="color:var(--text3);font-size:13px">No students have joined yet.</p>';
+      return;
+    }
+    el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+        <th style="padding:6px 8px;text-align:left">Student</th>
+        <th style="padding:6px 8px;text-align:center">Status</th>
+        <th style="padding:6px 8px;text-align:center">Suspicion</th>
+        <th style="padding:6px 8px;text-align:center">Tabs</th>
+      </tr></thead>
+      <tbody>${rows.students.map(s => `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:8px">${esc(s.name)}</td>
+          <td style="padding:8px;text-align:center"><span class="badge ${s.status==='in_progress'?'badge-green':'badge-gray'}">${s.status}</span></td>
+          <td style="padding:8px;text-align:center;color:${s.suspicion>=70?'var(--red)':s.suspicion>=40?'var(--orange)':s.suspicion>=10?'var(--yellow)':'var(--green)'}">${s.suspicion}</td>
+          <td style="padding:8px;text-align:center">${s.tabs}</td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  } catch { /* ignore */ }
+}
+
+async function createClassroom(e) {
+  e.preventDefault();
+  const btn = e.target.querySelector('[type=submit]');
+  btn.disabled = true; btn.textContent = 'Starting...';
+  try {
+    await apiPost('/api/classroom/create', {
+      title:            document.getElementById('cr-title').value.trim(),
+      duration_minutes: parseInt(document.getElementById('cr-duration')?.value || '60'),
+      total_marks:      parseInt(document.getElementById('cr-total')?.value    || '100'),
+      passing_marks:    parseInt(document.getElementById('cr-pass')?.value     || '40'),
+    });
+    buildClassroom();
+  } catch (err) {
+    btn.disabled = false; btn.textContent = 'Start & Get Code';
+    alert('Failed to start classroom: ' + err.message);
+  }
+}
+
+async function endClassroom(examId) {
+  if (!confirm('End this exam session? Students will no longer be able to join.')) return;
+  try {
+    await apiPost('/api/classroom/end', { exam_id: examId });
+    buildClassroom();
+  } catch (err) {
+    alert('Failed to end classroom: ' + err.message);
+  }
+}
+
+async function joinClassroom(e) {
+  e.preventDefault();
+  const btn   = document.getElementById('join-btn');
+  const errEl = document.getElementById('join-error');
+  const code  = document.getElementById('join-code-input').value.trim().toUpperCase();
+  errEl.textContent = '';
+  btn.disabled = true; btn.textContent = 'Joining...';
+  try {
+    const d = await apiPost('/api/classroom/join', { code });
+    // Start the exam UI with the returned data
+    startExamFromClassroom(d);
+  } catch (err) {
+    errEl.textContent = err.message;
+    btn.disabled = false; btn.textContent = 'Enter Classroom';
+  }
+}
+
+function startExamFromClassroom(d) {
+  examState = {
+    attempt_id: d.attempt_id,
+    exam:       d.exam,
+    questions:  d.questions,
+    answers:    {},
+    timerInterval: null,
+  };
+  currentAttemptId = d.attempt_id;
+  renderExamOverlay();
+  startExamTimer();
+  startWarningPolling();
+  document.documentElement.requestFullscreen().catch(() => {});
+}
+
+async function buildAnalytics(examId = null) {
+  const container = document.getElementById('page-analytics');
+  container.innerHTML = loadingHtml();
+  try {
+  const url = examId ? `/api/analytics?exam_id=${examId}` : '/api/analytics';
+  const d = await api(url);
+
+  const selectorOptions = [
+    `<option value="" ${!examId ? 'selected' : ''}>Overall (All Exams)</option>`,
+    ...(d.exams || []).map(e =>
+      `<option value="${e.exam_id}" ${e.exam_id === d.selectedExam ? 'selected' : ''}>${esc(e.title)}</option>`)
+  ].join('');
+
+  const diffTitle = examId ? 'Question Difficulty' : 'Question Difficulty (Top 10 Hardest)';
+
+  container.innerHTML = `
+    <div style="margin-bottom:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px;color:var(--text3)">Exam:</label>
+      <select style="background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;min-width:260px"
+        onchange="buildAnalytics(this.value ? parseInt(this.value) : null)">
+        ${selectorOptions}
+      </select>
+    </div>
     ${renderStatCards(d.stats)}
     <div class="two-col">
       <div class="card">
-        <div class="card-header"><span class="card-title">Question Difficulty (Q04)</span></div>
+        <div class="card-header"><span class="card-title">${esc(diffTitle)}</span></div>
         ${renderDifficultyTable(d.difficulty)}
       </div>
       <div class="card">
-        <div class="card-header"><span class="card-title">Class Ranking (Q10)</span></div>
+        <div class="card-header"><span class="card-title">Class Ranking</span></div>
         ${renderRankingTable(d.ranking)}
       </div>
-    </div>`, true);
+    </div>`;
+  animateProgressBars();
+  } catch (err) {
+    container.innerHTML = errorHtml('analytics', err.message);
+  }
 }
 
 function buildSchema() {
@@ -544,46 +939,138 @@ function buildSchema() {
     </div>`);
 }
 
+// Toggle per-student detail row inline in the results table
+async function showStudentDetail(attemptId, btn) {
+  const detailRow = document.getElementById(`detail-row-${attemptId}`);
+  const detailDiv = document.getElementById(`detail-${attemptId}`);
+  if (!detailRow || !detailDiv) return;
+
+  // Toggle off if already open
+  if (detailRow.style.display !== 'none') {
+    detailRow.style.display = 'none';
+    btn.textContent = 'View';
+    return;
+  }
+
+  btn.textContent = '...';
+  btn.disabled = true;
+  const d = await api(`/api/results/${attemptId}`);
+  btn.disabled = false;
+
+  if (d.error) {
+    detailDiv.innerHTML = `<p style="color:var(--red)">Failed to load detail.</p>`;
+  } else {
+    detailDiv.innerHTML = renderStudentDetail(d);
+  }
+  detailRow.style.display = '';
+  btn.textContent = 'Hide';
+}
+
 function buildResults() {
-  return buildPage('results', '/api/results', d => `
-    <div class="card">
-      <div class="card-header"><span class="card-title">Exam Results — ${esc(d.student)}</span></div>
-      <div class="card-body">${renderResults(d)}</div>
-    </div>`);
+  return buildPage('results', '/api/results', d => {
+    if (!d.exams || d.exams.length === 0)
+      return `<p style="color:var(--text3)">No submitted results yet.</p>`;
+
+    const examCards = d.exams.map(ex => `
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header">
+          <span class="card-title">${esc(ex.title)}</span>
+          <span class="badge badge-gray">${ex.students.length} students</span>
+        </div>
+        ${renderResultsTable(ex.students)}
+      </div>`).join('');
+
+    const rankingCard = d.ranking && d.ranking.length ? `
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header">
+          <span class="card-title">Overall Class Ranking</span>
+          <span class="badge badge-purple">${d.ranking.length} students</span>
+        </div>
+        ${renderClassRanking(d.ranking)}
+      </div>` : '';
+
+    return rankingCard + examCards;
+  });
 }
 
 function buildExams() {
-  return buildPage('exams', '/api/exams', d => {
+  const container = document.getElementById('page-exams');
+  container.innerHTML = loadingHtml();
+  api('/api/exams').then(d => {
     const total     = d.exams.length;
-    const upcoming  = d.exams.filter(e => e.statusText.includes('Upcoming')).length;
-    const active    = d.exams.filter(e => e.statusText.includes('Active')).length;
-    const completed = d.exams.filter(e => e.statusText.includes('Completed')).length;
-    return `
-      <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">
-        <span class="badge badge-gray">${total} Total</span>
-        <span class="badge badge-green">${active} Active</span>
-        <span class="badge badge-purple">${upcoming} Upcoming</span>
-        <span class="badge badge-gray">${completed} Completed</span>
-      </div>
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">All Exams</span>
-          <span class="topbar-status">Live from DB · Exams table</span>
-        </div>
-        ${renderExamsTable(d.exams)}
+    const active    = d.exams.filter(e => e.isActive).length;
+    const upcoming  = d.exams.filter(e => e.isUpcoming).length;
+    const drafts    = d.exams.filter(e => e.isDraft).length;
+    const completed = d.exams.filter(e => !e.isActive && !e.isUpcoming && !e.isDraft).length;
+    const isTeacher = currentUser && ['teacher','instructor','admin'].includes(currentUser.role);
+
+    if (total === 0) {
+      container.innerHTML = `
+        <div style="max-width:520px;margin:80px auto 0;text-align:center">
+          <div style="font-size:40px;margin-bottom:16px">▤</div>
+          <div style="font-size:22px;font-weight:700;margin-bottom:8px">No Exams Yet</div>
+          <div style="font-size:14px;color:var(--text3);margin-bottom:28px;line-height:1.7">
+            Create your first exam, add questions with marks,<br>then open it to get a code for your students.
+          </div>
+          <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn-outline" onclick="showCreateCourseModal()">+ Create Course First</button>
+            <button class="btn btn-primary" onclick="showCreateExamModal()">+ New Exam</button>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const statRow = `
+      <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:center">
+        <span class="badge badge-gray">${total} exam${total !== 1 ? 's' : ''}</span>
+        ${drafts    > 0 ? `<span class="badge badge-gray">${drafts} draft${drafts !== 1 ? 's' : ''}</span>` : ''}
+        ${active    > 0 ? `<span class="badge badge-green">● ${active} live now</span>` : ''}
+        ${upcoming  > 0 ? `<span class="badge badge-purple">${upcoming} upcoming</span>` : ''}
+        ${completed > 0 ? `<span class="badge badge-gray">${completed} completed</span>` : ''}
+        <button class="btn btn-primary" style="margin-left:auto;font-size:13px" onclick="showCreateExamModal()">+ New Exam</button>
       </div>`;
+
+    container.innerHTML = statRow + renderMyExamCards(d.exams, isTeacher);
+  }).catch(err => {
+    container.innerHTML = errorHtml('exams', err.message);
   });
 }
 
 function buildQuestions() {
-  return buildPage('questions', '/api/questions', d => {
-    const total = d.groups.reduce((sum, g) => sum + g.questions.length, 0);
-    return `
-      <div style="margin-bottom:16px;font-size:13px;color:var(--text3)">
-        ${total} questions across ${d.groups.length} exams · Correct answer shown in
-        <strong style="color:var(--green)">green</strong> (admin view)
+  const container = document.getElementById('page-questions');
+  container.innerHTML = loadingHtml();
+  // Load both questions and exams together to show marking scheme summary
+  Promise.all([api('/api/questions'), api('/api/exams')]).then(([qd, ed]) => {
+    const total = qd.groups.reduce((sum, g) => sum + g.questions.length, 0);
+    // Build a map of exam metadata (declared marks, duration)
+    const examMeta = {};
+    (ed.exams || []).forEach(e => { examMeta[e.id] = e; });
+
+    if (qd.groups.length === 0) {
+      container.innerHTML = `
+        <div style="max-width:500px;margin:80px auto 0;text-align:center">
+          <div style="font-size:40px;margin-bottom:16px">?</div>
+          <div style="font-size:22px;font-weight:700;margin-bottom:8px">Question Bank is Empty</div>
+          <div style="font-size:14px;color:var(--text3);margin-bottom:24px;line-height:1.7">
+            Go to <strong>My Exams</strong>, open an exam, and click <strong>+ Question</strong><br>
+            to start building your question bank with marks.
+          </div>
+          <button class="btn btn-primary" onclick="showPage('exams')">Go to My Exams</button>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+        <div>
+          <span style="font-size:15px;font-weight:600">${total} question${total !== 1 ? 's' : ''}</span>
+          <span style="font-size:13px;color:var(--text3);margin-left:8px">across ${qd.groups.length} exam${qd.groups.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text3)">Click <strong>+ Question</strong> on any exam below to add more</div>
       </div>
-      ${renderQuestionsGroups(d.groups)}`;
+      ${renderBrilliantQuestionBank(qd.groups, examMeta)}`;
+  }).catch(err => {
+    container.innerHTML = errorHtml('questions', err.message);
   });
 }
 
@@ -608,9 +1095,21 @@ async function showCreateCourseModal() {
     alert('Could not load instructors: ' + err.message);
     return;
   }
-  const opts = instructors.map(i =>
-    `<option value="${i.user_id}">${esc(i.full_name)} &lt;${esc(i.email)}&gt;</option>`
-  ).join('');
+  // Instructors see their own name auto-filled; admins get a dropdown
+  const isAdmin = currentUser?.roles?.includes('admin');
+  const isTeacher = currentUser?.roles?.some(r => ['instructor','teacher'].includes(r));
+  const instructorField = isAdmin
+    ? `<div class="form-group">
+        <label>Instructor</label>
+        <select name="instructor_id" required>
+          ${instructors.map(i => `<option value="${i.user_id}">${esc(i.full_name)} &lt;${esc(i.email)}&gt;</option>`).join('')}
+        </select>
+      </div>`
+    : `<div class="form-group">
+        <label>Instructor</label>
+        <input type="text" value="${esc(currentUser.full_name)}" disabled style="opacity:.7" />
+        <input type="hidden" name="instructor_id" value="${currentUser.user_id}" />
+      </div>`;
 
   showModal('Create New Course', `
     <form id="course-form" onsubmit="submitCreateCourse(event)">
@@ -619,10 +1118,7 @@ async function showCreateCourseModal() {
           <label>Course Code</label>
           <input type="text" name="course_code" required placeholder="e.g. CS401" maxlength="20" />
         </div>
-        <div class="form-group">
-          <label>Instructor</label>
-          <select name="instructor_id" required>${opts}</select>
-        </div>
+        ${instructorField}
       </div>
       <div class="form-group">
         <label>Course Name</label>
@@ -637,6 +1133,12 @@ async function showCreateCourseModal() {
         <button type="submit" class="btn btn-primary" id="course-submit-btn">Create Course</button>
       </div>
     </form>`);
+
+  // For admins: default the dropdown to the logged-in user if they're an instructor
+  if (isAdmin && currentUser?.user_id) {
+    const sel = document.querySelector('#modal-body select[name="instructor_id"]');
+    if (sel) sel.value = currentUser.user_id;
+  }
 }
 
 async function submitCreateCourse(e) {
@@ -692,28 +1194,27 @@ async function showCreateExamModal() {
     return;
   }
 
-  const opts = courses.map(c =>
-    `<option value="${c.course_id}">${esc(c.course_code)} — ${esc(c.course_name)}</option>`
-  ).join('');
-
-  const now  = new Date();
-  const pad  = n => String(n).padStart(2, '0');
-  const fmt  = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const tomorrow = new Date(now.getTime() + 24*60*60*1000);
-  const nextWeek  = new Date(now.getTime() + 8*24*60*60*1000);
+  // Hide auto-generated classroom courses (ROOM... prefix) from the dropdown
+  const visibleCourses = courses.filter(c => !c.course_code.startsWith('ROOM'));
+  const opts = visibleCourses.length
+    ? visibleCourses.map(c =>
+        `<option value="${c.course_id}">${esc(c.course_code)} — ${esc(c.course_name)}</option>`
+      ).join('')
+    : `<option value="" disabled>No courses yet — create one first</option>`;
 
   showModal('Create New Exam', `
     <form id="exam-form" onsubmit="submitCreateExam(event)">
       <div class="form-group">
         <label>Course</label>
-        <select name="course_id" required>${opts}</select>
+        <select name="course_id" required ${!visibleCourses.length ? 'disabled' : ''}>${opts}</select>
+        ${!visibleCourses.length ? `<div style="margin-top:6px"><button type="button" class="btn btn-outline" style="font-size:12px" onclick="closeModal();showCreateCourseModal()">+ Create a Course first</button></div>` : ''}
       </div>
       <div class="form-group">
         <label>Exam Title</label>
         <input type="text" name="title" required placeholder="e.g. DBMS Mid-Term Exam" />
       </div>
       <div class="form-group">
-        <label>Description (optional)</label>
+        <label>Description <span style="color:var(--text3);font-weight:400">(optional)</span></label>
         <textarea name="description" placeholder="Brief description of the exam…"></textarea>
       </div>
       <div class="form-row">
@@ -732,17 +1233,7 @@ async function showCreateExamModal() {
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label>Window Start</label>
-          <input type="datetime-local" name="window_start" required value="${fmt(tomorrow)}" />
-        </div>
-        <div class="form-group">
-          <label>Window End</label>
-          <input type="datetime-local" name="window_end" required value="${fmt(nextWeek)}" />
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Max Attempts</label>
+          <label>Max Attempts per student</label>
           <input type="number" name="max_attempts" required min="1" value="1" />
         </div>
       </div>
@@ -752,9 +1243,6 @@ async function showCreateExamModal() {
         </label>
         <label class="form-check">
           <input type="checkbox" name="show_results_immediately" /> Show Results Immediately
-        </label>
-        <label class="form-check">
-          <input type="checkbox" name="is_published" checked /> Publish Now
         </label>
       </div>
       <div class="form-actions">
@@ -780,25 +1268,180 @@ async function submitCreateExam(e) {
     total_marks:              parseFloat(form.total_marks.value),
     passing_marks:            parseFloat(form.passing_marks.value),
     duration_minutes:         parseInt(form.duration_minutes.value),
-    window_start:             toDatetime(form.window_start.value),
-    window_end:               toDatetime(form.window_end.value),
+    // Window is managed via Open/Close on the Exams page, not at creation time.
+    // Set far-future placeholders so the DB constraint is satisfied and the exam
+    // never accidentally becomes "Active" while the teacher is building it.
+    window_start:             toDatetime(new Date(Date.now() + 365*24*60*60*1000).toISOString().slice(0,16)),
+    window_end:               toDatetime(new Date(Date.now() + 366*24*60*60*1000).toISOString().slice(0,16)),
     max_attempts:             parseInt(form.max_attempts.value),
     shuffle_questions:        form.shuffle_questions.checked,
     show_results_immediately: form.show_results_immediately.checked,
-    is_published:             form.is_published.checked,
+    is_published:             false,   // always unpublished until proctor explicitly opens it
   };
 
   try {
-    await apiPost('/api/exams', data);
+    const result = await apiPost('/api/exams', data);
     closeModal();
     showPage('exams');
     buildExams();
     buildDashboard();
+    // Immediately prompt to add the first question
+    if (result.exam_id) {
+      setTimeout(() => showAddQuestionModal(result.exam_id, data.title, data.total_marks), 200);
+    }
   } catch (err) {
     btn.disabled = false;
     btn.textContent = 'Create Exam';
     alert('Failed to create exam: ' + err.message);
   }
+}
+
+function openExam(id, title, durationMin) {
+  _openExamId    = parseInt(id);
+  _openExamTitle = title;
+  const defaultHrs = Math.max(1, Math.ceil((durationMin || 60) / 60 + 0.5));
+  // Min schedule time = now + 10 min, rounded to next 5-min slot
+  const minDate = new Date(Date.now() + 10 * 60 * 1000);
+  minDate.setSeconds(0, 0);
+  const minDateStr = new Date(minDate.getTime() - minDate.getTimezoneOffset() * 60000)
+    .toISOString().slice(0, 16);
+  // Default suggested schedule = now + 15 min
+  const suggestDate = new Date(Date.now() + 15 * 60 * 1000);
+  suggestDate.setSeconds(0, 0);
+  const suggestStr = new Date(suggestDate.getTime() - suggestDate.getTimezoneOffset() * 60000)
+    .toISOString().slice(0, 16);
+
+  showModal(`Open Exam — ${title}`, `
+    <div style="padding:8px 0 4px">
+      <div style="font-size:13px;color:var(--text3);margin-bottom:20px;line-height:1.6;text-align:center">
+        Publishing will generate a <strong>join code</strong> for students.<br>
+        Share the code verbally — students enter it to start.
+      </div>
+
+      <div style="margin-bottom:18px">
+        <label style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:8px">
+          Window duration (hours)
+        </label>
+        <input id="open-hrs-input" type="number" min="0.5" max="72" step="0.5"
+          value="${defaultHrs}"
+          style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:15px">
+      </div>
+
+      <div style="margin-bottom:18px">
+        <label style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:8px">
+          When to start
+        </label>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <label class="open-when-opt" id="opt-now" style="flex:1;display:flex;align-items:center;gap:8px;background:var(--bg3);border:2px solid var(--accent);border-radius:8px;padding:10px 14px;cursor:pointer">
+            <input type="radio" name="open_when" value="now" checked onchange="toggleSchedulePicker(false)"
+                   style="accent-color:var(--accent)"> Open Now
+          </label>
+          <label class="open-when-opt" id="opt-later" style="flex:1;display:flex;align-items:center;gap:8px;background:var(--bg3);border:2px solid var(--border);border-radius:8px;padding:10px 14px;cursor:pointer">
+            <input type="radio" name="open_when" value="later" onchange="toggleSchedulePicker(true)"
+                   style="accent-color:var(--accent)"> Schedule
+          </label>
+        </div>
+        <div id="schedule-picker" style="display:none">
+          <input id="scheduled-at-input" type="datetime-local" min="${minDateStr}" value="${suggestStr}"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px">
+          <div style="font-size:11px;color:var(--text3);margin-top:5px">
+            Must be at least <strong>10 minutes</strong> from now. Join code is generated immediately but exam only opens at the scheduled time.
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:12px;justify-content:center;margin-top:8px">
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" id="open-exam-btn" onclick="confirmOpenExam()">
+          Open &amp; Get Code
+        </button>
+      </div>
+    </div>`);
+}
+
+function toggleSchedulePicker(show) {
+  const picker = document.getElementById('schedule-picker');
+  if (picker) picker.style.display = show ? '' : 'none';
+  document.getElementById('opt-now').style.borderColor  = show ? 'var(--border)' : 'var(--accent)';
+  document.getElementById('opt-later').style.borderColor = show ? 'var(--accent)' : 'var(--border)';
+}
+
+async function confirmOpenExam() {
+  const id    = _openExamId;
+  const title = _openExamTitle;
+  const btn = document.getElementById('open-exam-btn');
+  const hrs = parseFloat(document.getElementById('open-hrs-input')?.value || '2');
+  if (!hrs || hrs <= 0) return alert('Enter a valid number of hours.');
+
+  const when = document.querySelector('input[name=open_when]:checked')?.value;
+  let scheduled_at = null;
+  if (when === 'later') {
+    const val = document.getElementById('scheduled-at-input')?.value;
+    if (!val) return alert('Please pick a scheduled start time.');
+    const sched = new Date(val);
+    if (sched < new Date(Date.now() + 9.5 * 60 * 1000))
+      return alert('Scheduled time must be at least 10 minutes from now.');
+    scheduled_at = sched.toISOString();
+  }
+
+  btn.disabled = true; btn.textContent = when === 'later' ? 'Scheduling…' : 'Opening…';
+  try {
+    const body = { duration_hours: hrs };
+    if (scheduled_at) body.scheduled_at = scheduled_at;
+
+    const res = await fetch(`/api/exams/${id}/open`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    closeModal();
+    if (data.join_code) {
+      showCodeBanner(data.join_code, title, data.scheduled);
+    }
+    buildExams();
+    buildClassroom();
+  } catch (err) {
+    btn.disabled = false; btn.textContent = 'Open & Get Code';
+    alert('Failed to open exam: ' + err.message);
+  }
+}
+
+function showCodeBanner(code, title, isScheduled) {
+  const heading = isScheduled ? 'Exam Scheduled — Share This Code' : 'Exam Open — Share This Code';
+  const subtitle = isScheduled
+    ? `Exam <strong>${esc(title)}</strong> is scheduled.<br>Share the code now — students enter it when the exam opens.`
+    : `Exam <strong>${esc(title)}</strong> is now live.<br>Tell your students this code — they enter it on the Exam Session page.`;
+  showModal(heading, `
+    <div style="text-align:center;padding:16px 8px 8px">
+      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${subtitle}</div>
+      <div style="font-size:64px;font-weight:900;letter-spacing:14px;color:var(--accent2);font-family:monospace;line-height:1;margin-bottom:10px;cursor:pointer"
+        onclick="copyCode('${esc(code)}')" title="Click to copy">${esc(code)}</div>
+      <div id="code-banner-hint" style="font-size:12px;color:var(--text3);margin-bottom:20px">Click code to copy</div>
+      <div style="display:flex;gap:12px;justify-content:center">
+        <button class="btn btn-outline" onclick="copyCode('${esc(code)}');document.getElementById('code-banner-hint').textContent='Copied!'">
+          Copy Code
+        </button>
+        <button class="btn btn-primary" onclick="closeModal();showPage('classroom')">
+          ${isScheduled ? 'View Exams' : 'View Live Session'}
+        </button>
+      </div>
+    </div>`);
+}
+
+async function closeExam(id, title) {
+  if (!confirm(`End exam "${title}" now?\n\nNo new attempts will be allowed.`)) return;
+  try {
+    const res = await fetch(`/api/exams/${id}/close`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    buildExams();
+    buildStudentView();
+  } catch (err) { alert('Failed to close exam: ' + err.message); }
 }
 
 async function deleteExam(id, title) {
@@ -814,18 +1457,32 @@ async function deleteExam(id, title) {
 }
 
 // ── Add / Delete Question ─────────────────────────────────────
-function showAddQuestionModal(examId, examTitle) {
+const MCQ_LABELS = ['A','B','C','D','E','F','G','H','I','J'];
+
+// currentExamTotalMarks is set when opening the modal so submitAddQuestion can show live tally
+let _addQExamTotalMarks = null;
+let _addQExamId = null;
+
+// Stored by openExam() so confirmOpenExam() doesn't need to pass title through an onclick string
+let _openExamId    = null;
+let _openExamTitle = null;
+
+function showAddQuestionModal(examId, examTitle, examTotalMarks) {
+  _addQExamId = examId;
+  // Try to get total marks from passed param, or look it up from the page data
+  _addQExamTotalMarks = examTotalMarks ?? null;
+
   showModal(`Add Question — ${examTitle}`, `
-    <form id="question-form" onsubmit="submitAddQuestion(event)">
-      <input type="hidden" name="exam_id" value="${examId}" />
+    <div id="question-form">
+      <input type="hidden" id="q-exam-id" value="${examId}" />
       <div class="form-group">
         <label>Question Text</label>
-        <textarea name="question_text" required rows="3" placeholder="Enter the question…"></textarea>
+        <textarea id="q-text" name="question_text" rows="3" placeholder="Enter the question…"></textarea>
       </div>
       <div class="form-row">
         <div class="form-group">
           <label>Type</label>
-          <select name="question_type" onchange="toggleMcqOptions(this.value)">
+          <select id="q-type" name="question_type" onchange="toggleMcqOptions(this.value)">
             <option value="MCQ">MCQ</option>
             <option value="TRUE_FALSE">True / False</option>
             <option value="SHORT_ANSWER">Short Answer</option>
@@ -833,11 +1490,11 @@ function showAddQuestionModal(examId, examTitle) {
         </div>
         <div class="form-group">
           <label>Marks</label>
-          <input type="number" name="marks" required min="0.5" step="0.5" value="5" />
+          <input id="q-marks" type="number" name="marks" min="0.5" step="0.5" value="5" />
         </div>
         <div class="form-group">
           <label>Difficulty</label>
-          <select name="difficulty_level">
+          <select id="q-difficulty" name="difficulty_level">
             <option value="easy">Easy</option>
             <option value="medium" selected>Medium</option>
             <option value="hard">Hard</option>
@@ -845,77 +1502,215 @@ function showAddQuestionModal(examId, examTitle) {
         </div>
         <div class="form-group">
           <label>Order #</label>
-          <input type="number" name="order_index" value="0" min="0" />
+          <input id="q-order" type="number" name="order_index" value="0" min="0" />
         </div>
       </div>
+
+      <!-- MCQ dynamic options -->
       <div id="mcq-options-block">
-        <div class="form-row">
-          <div class="form-group">
-            <label>Option A</label>
-            <input type="text" name="option_a" placeholder="Option A" />
-          </div>
-          <div class="form-group">
-            <label>Option B</label>
-            <input type="text" name="option_b" placeholder="Option B" />
-          </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <label style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px">
+            Options <span style="font-weight:400;text-transform:none">(select correct answer)</span>
+          </label>
+          <button type="button" class="btn btn-outline" style="padding:4px 12px;font-size:12px"
+                  onclick="addMcqOption()" id="add-option-btn">+ Add Option</button>
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Option C</label>
-            <input type="text" name="option_c" placeholder="Option C" />
-          </div>
-          <div class="form-group">
-            <label>Option D</label>
-            <input type="text" name="option_d" placeholder="Option D" />
-          </div>
-        </div>
+        <div id="mcq-options-list"></div>
       </div>
-      <div class="form-group">
+
+      <!-- True/False correct answer -->
+      <div id="tf-block" style="display:none" class="form-group">
         <label>Correct Answer</label>
-        <input type="text" name="correct_answer" required
-          placeholder="MCQ: A / B / C / D   |   True/False: TRUE / FALSE" />
+        <select id="q-tf-answer" name="tf_answer">
+          <option value="TRUE">True</option>
+          <option value="FALSE">False</option>
+        </select>
       </div>
+
+      <!-- Short answer key -->
+      <div id="sa-block" style="display:none" class="form-group">
+        <label>Answer Key</label>
+        <input id="q-sa-answer" type="text" name="sa_answer" placeholder="Expected answer (shown to teacher)" />
+      </div>
+
+      <!-- Live marks tally — updated after each successful add -->
+      <div id="q-add-status"></div>
+
       <div class="form-actions">
         <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="question-submit-btn">Add Question</button>
+        <button type="button" class="btn btn-primary" id="question-submit-btn" onclick="submitAddQuestion()">Add Question</button>
       </div>
-    </form>`);
+    </div>`);
+
+  // Render initial 2 MCQ options and ensure block visibility is correct
+  renderMcqOptions(2);
+  toggleMcqOptions('MCQ');
+}
+
+function renderMcqOptions(count) {
+  const list = document.getElementById('mcq-options-list');
+  if (!list) return;
+  list.innerHTML = '';
+  for (let i = 0; i < count; i++) {
+    const label = MCQ_LABELS[i];
+    const row = document.createElement('div');
+    row.className = 'mcq-option-row';
+    row.dataset.idx = i;
+    row.innerHTML = `
+      <label class="mcq-radio-label" title="Mark as correct">
+        <input type="radio" name="mcq_correct" value="${label}" />
+      </label>
+      <span class="mcq-option-letter">${label}</span>
+      <input type="text" class="mcq-option-input" name="option_${label.toLowerCase()}"
+             placeholder="Option ${label}" />
+      ${i >= 2 ? `<button type="button" class="mcq-remove-btn" onclick="removeMcqOption(${i})" title="Remove">✕</button>` : '<span style="width:24px"></span>'}
+    `;
+    list.appendChild(row);
+  }
+  const addBtn = document.getElementById('add-option-btn');
+  if (addBtn) addBtn.style.display = count >= 10 ? 'none' : '';
+}
+
+function addMcqOption() {
+  const list = document.getElementById('mcq-options-list');
+  if (!list) return;
+  const rows = list.querySelectorAll('.mcq-option-row');
+  const current = rows.length;
+  if (current >= 10) return;
+  // Save existing typed values and which radio was checked
+  const vals = Array.from(rows).map(r => r.querySelector('input[type=text]').value);
+  const wasCorrect = list.querySelector('input[type=radio]:checked')?.value;
+  // Re-render with one extra slot
+  renderMcqOptions(current + 1);
+  // Restore saved values + correct selection
+  const newRows = list.querySelectorAll('.mcq-option-row');
+  newRows.forEach((r, i) => {
+    if (i < vals.length) r.querySelector('input[type=text]').value = vals[i];
+    const radio = r.querySelector('input[type=radio]');
+    if (radio && radio.value === wasCorrect) radio.checked = true;
+  });
+}
+
+function removeMcqOption(idx) {
+  const list = document.getElementById('mcq-options-list');
+  if (!list) return;
+  const rows = list.querySelectorAll('.mcq-option-row');
+  if (rows.length <= 2) return;
+  // Collect values before re-render
+  const vals = [];
+  rows.forEach(r => vals.push(r.querySelector('input[type=text]').value));
+  const wasCorrect = list.querySelector('input[type=radio]:checked')?.value;
+  vals.splice(idx, 1);
+  const newCount = vals.length;
+  renderMcqOptions(newCount);
+  // Restore values
+  const newRows = list.querySelectorAll('.mcq-option-row');
+  newRows.forEach((r, i) => {
+    r.querySelector('input[type=text]').value = vals[i] || '';
+    const radio = r.querySelector('input[type=radio]');
+    if (radio.value === wasCorrect) radio.checked = true;
+  });
 }
 
 function toggleMcqOptions(type) {
-  const el = document.getElementById('mcq-options-block');
-  if (el) el.style.display = type === 'MCQ' ? '' : 'none';
+  document.getElementById('mcq-options-block').style.display = type === 'MCQ' ? '' : 'none';
+  document.getElementById('tf-block').style.display          = type === 'TRUE_FALSE' ? '' : 'none';
+  document.getElementById('sa-block').style.display          = type === 'SHORT_ANSWER' ? '' : 'none';
 }
 
-async function submitAddQuestion(e) {
-  e.preventDefault();
-  const form = e.target;
-  const btn  = document.getElementById('question-submit-btn');
+async function submitAddQuestion() {
+  const btn = document.getElementById('question-submit-btn');
   btn.disabled = true;
   btn.textContent = 'Adding…';
 
-  const type = form.question_type.value;
-  const data = {
-    exam_id:          parseInt(form.exam_id.value),
-    question_text:    form.question_text.value.trim(),
-    question_type:    type,
-    marks:            parseFloat(form.marks.value),
-    option_a:         type === 'MCQ' ? (form.option_a.value.trim() || null) : null,
-    option_b:         type === 'MCQ' ? (form.option_b.value.trim() || null) : null,
-    option_c:         type === 'MCQ' ? (form.option_c.value.trim() || null) : null,
-    option_d:         type === 'MCQ' ? (form.option_d.value.trim() || null) : null,
-    correct_answer:   type === 'SHORT_ANSWER'
-                        ? form.correct_answer.value.trim()
-                        : form.correct_answer.value.trim().toUpperCase(),
-    difficulty_level: form.difficulty_level.value,
-    order_index:      parseInt(form.order_index.value) || 0,
-  };
+  const examId      = parseInt(document.getElementById('q-exam-id').value);
+  const questionText = document.getElementById('q-text').value.trim();
+  const type        = document.getElementById('q-type').value;
+  const marks       = parseFloat(document.getElementById('q-marks').value);
+  const difficulty  = document.getElementById('q-difficulty').value;
+  const orderIndex  = parseInt(document.getElementById('q-order').value) || 0;
+
+  if (!questionText) {
+    btn.disabled = false; btn.textContent = 'Add Question';
+    return alert('Please enter the question text.');
+  }
+  if (!marks || marks <= 0) {
+    btn.disabled = false; btn.textContent = 'Add Question';
+    return alert('Please enter a valid mark value (> 0).');
+  }
+
+  // Guard: don't let questions total exceed declared exam total marks
+  try {
+    const examData = await api('/api/exams');
+    const thisExam = examData.exams.find(ex => ex.id === examId);
+    if (thisExam) {
+      const declared = parseFloat(thisExam.totalMarks) || 0;
+      const soFar    = parseFloat(thisExam.questionsTotalMarks) || 0;
+      if (declared > 0 && soFar + marks > declared + 0.001) {
+        btn.disabled = false; btn.textContent = 'Add Question';
+        return alert(`Adding ${marks} mark(s) would exceed the exam total.\nAlready used: ${soFar} / ${declared} marks.\nRemaining: ${+(declared - soFar).toFixed(2)} marks.`);
+      }
+    }
+  } catch (_) { /* non-fatal — let the server catch it */ }
+
+  const data = { exam_id: examId, question_text: questionText, question_type: type, marks, difficulty_level: difficulty, order_index: orderIndex };
+
+  let correct_answer = '';
+  if (type === 'MCQ') {
+    const correctRadio = document.querySelector('#mcq-options-list input[name=mcq_correct]:checked');
+    if (!correctRadio) {
+      btn.disabled = false; btn.textContent = 'Add Question';
+      return alert('Please select the correct answer option.');
+    }
+    correct_answer = correctRadio.value;
+    MCQ_LABELS.forEach(lbl => {
+      const inp = document.querySelector(`#mcq-options-list input[name=option_${lbl.toLowerCase()}]`);
+      data[`option_${lbl.toLowerCase()}`] = inp?.value.trim() || null;
+    });
+  } else if (type === 'TRUE_FALSE') {
+    correct_answer = document.getElementById('q-tf-answer').value;
+  } else {
+    correct_answer = document.getElementById('q-sa-answer')?.value.trim() || '';
+  }
+  data.correct_answer = correct_answer || null;
 
   try {
     await apiPost('/api/questions', data);
-    closeModal();
     buildQuestions();
     buildExams();
+
+    const examData = await api('/api/exams');
+    const thisExam = examData.exams.find(ex => ex.id === examId);
+    const qTotal   = thisExam?.questionsTotalMarks ?? '?';
+    const declared = thisExam?.totalMarks ?? _addQExamTotalMarks ?? '?';
+    const qCount   = thisExam?.questions ?? '?';
+    const match    = typeof qTotal === 'number' && typeof declared === 'number' && Math.abs(qTotal - declared) <= 0.01;
+
+    // Reset fields manually (no form.reset() — just clear the inputs)
+    document.getElementById('q-text').value = '';
+    document.getElementById('q-type').value = 'MCQ';
+    document.getElementById('q-marks').value = '5';
+    document.getElementById('q-order').value = '0';
+    renderMcqOptions(2);
+    toggleMcqOptions('MCQ');
+
+    const statusColor = match ? 'var(--green)' : 'var(--orange)';
+    const statusMsg   = match
+      ? `✓ ${qCount} question${qCount !== 1 ? 's' : ''} · ${qTotal}/${declared} marks — marks match! You can open the exam now.`
+      : `${qCount} question${qCount !== 1 ? 's' : ''} · ${qTotal}/${declared} marks — keep adding until total matches.`;
+
+    const statusBar = document.getElementById('q-add-status');
+    if (statusBar) {
+      statusBar.innerHTML = `<div style="background:var(--bg3);border:1px solid ${statusColor};border-radius:6px;padding:8px 12px;font-size:12px;color:${statusColor};margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <span>${statusMsg}</span>
+        <button type="button" class="btn ${match ? 'btn-primary' : 'btn-outline'}" style="font-size:11px;padding:4px 12px;white-space:nowrap" onclick="closeModal()">
+          ${match ? 'Done — Open Exam' : 'Done for now'}
+        </button>
+      </div>`;
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Add Question';
   } catch (err) {
     btn.disabled = false;
     btn.textContent = 'Add Question';
@@ -986,7 +1781,7 @@ async function startExam(examId, examTitle) {
   if (!confirm(`Start "${examTitle}"?\n\nThe timer begins immediately. Make sure you are ready.`)) return;
 
   try {
-    const data = await apiPost(`/api/exams/${examId}/start`, { student_id: currentUser.user_id });
+    const data = await apiPost(`/api/exams/${examId}/start`, {});
     examState = {
       attempt_id: data.attempt_id,
       exam:       data.exam,
@@ -1132,10 +1927,11 @@ function showExamResult(result) {
 
 function closeExamResult() {
   document.getElementById('result-overlay').classList.remove('active');
-  showPage('dashboard');
-  buildDashboard();
-  buildStudentView();
-  buildAnalytics();
+  const dest = defaultPage();
+  showPage(dest);
+  if (canAccess('dashboard'))    buildDashboard();
+  if (canAccess('student-view')) buildStudentView();
+  if (canAccess('results'))      buildResults();
 }
 
 // ── Live proctoring event detection ───────────────────────────
@@ -1145,13 +1941,13 @@ let currentAttemptId = null;
 
 async function logProctoringEvent(eventType, severity, details) {
   if (!currentAttemptId) return;
+  // Must use apiPost (not raw fetch) so x-session-token header is included.
+  // Without auth the server returns 401 and the event is silently dropped.
   try {
-    await fetch('/api/proctor-event', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ attempt_id: currentAttemptId, event_type: eventType, severity, details }),
+    await apiPost('/api/proctor-event', {
+      attempt_id: currentAttemptId, event_type: eventType, severity, details,
     });
-  } catch { /* fail silently — don't disrupt the exam */ }
+  } catch { /* fail silently — never disrupt the exam */ }
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -1254,8 +2050,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target === e.currentTarget) closeModal();
   });
 
-  // Show login overlay — pages are fetched after successful login
-  document.getElementById('login-overlay').classList.add('active');
+  // Try to restore session from localStorage so reload doesn't force re-login
+  if (restoreSession()) {
+    onLoginSuccess();
+  } else {
+    // Show login overlay — pages are fetched after successful login
+    document.getElementById('login-overlay').classList.add('active');
+  }
 
   setInterval(updateClock, 1000);
   updateClock();
@@ -1263,15 +2064,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Called after successful login to fetch all page data
 function bootstrapPages() {
-  buildDashboard();
-  // Monitor is SSE-driven — built on demand by showPage('monitor')
-  buildCourses();
-  buildExams();
-  buildQuestions();
-  buildFlagged();
-  buildLogs();
-  buildStudentView();
-  buildAnalytics();
-  buildSchema();
-  buildResults();
+  buildClassroom(); // always build first — it's the landing page for every role
+  if (canAccess('dashboard'))    buildDashboard();
+  if (canAccess('courses'))      buildCourses();
+  if (canAccess('exams'))        buildExams();
+  if (canAccess('questions'))    buildQuestions();
+  if (canAccess('flagged'))      buildFlagged();
+  if (canAccess('logs'))         buildLogs();
+  if (canAccess('student-view')) buildStudentView();
+  if (canAccess('analytics'))    buildAnalytics();
+  if (canAccess('schema'))       buildSchema();
+  if (canAccess('results'))      buildResults();
 }
