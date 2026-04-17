@@ -1,4 +1,11 @@
--- ExamGuard — Schema  |  3NF/BCNF  |  InnoDB  |  utf8mb4
+-- ExamGuard — Schema  |  3NF (most tables reach BCNF)  |  InnoDB  |  utf8mb4
+-- Normalisation notes:
+--   • All tables are in 3NF: every non-key attribute depends only on the primary key.
+--   • Most tables also satisfy BCNF (every determinant is a superkey).
+--   • Exceptions (deliberate, documented):
+--       – ExamAttempts.percentage is derivable from score/total_marks; kept for query speed.
+--       – ExamAttempts counters (tab_switches, etc.) are denormalised aggregates maintained
+--         by triggers (T1/T2) to avoid expensive COUNT() joins on the proctor dashboard.
 
 DROP DATABASE IF EXISTS ExamProctor;
 CREATE DATABASE ExamProctor CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -11,7 +18,6 @@ CREATE TABLE Users (
     password_hash VARCHAR(255)   NOT NULL,
     full_name     VARCHAR(100)   NOT NULL,
     role          ENUM('student','teacher','admin') NOT NULL DEFAULT 'student',
-    phone_number  VARCHAR(20),
     created_at    DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     is_active     BOOLEAN        NOT NULL DEFAULT TRUE,
@@ -22,8 +28,7 @@ CREATE TABLE Users (
     UNIQUE KEY uq_users_email    (email),
     UNIQUE KEY uq_users_username (username),
 
-    CONSTRAINT chk_users_email  CHECK (email REGEXP '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'),
-    CONSTRAINT chk_users_phone  CHECK (phone_number IS NULL OR LENGTH(phone_number) >= 10)
+    CONSTRAINT chk_users_email  CHECK (email REGEXP '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')
 ) ENGINE=InnoDB;
 
 
@@ -84,7 +89,6 @@ CREATE TABLE Exams (
     join_code                CHAR(6)       NULL UNIQUE,
     max_attempts             INT           NOT NULL DEFAULT 1,
     shuffle_questions        BOOLEAN       NOT NULL DEFAULT TRUE,
-    show_results_immediately BOOLEAN       NOT NULL DEFAULT FALSE,
 
     PRIMARY KEY (exam_id),
 

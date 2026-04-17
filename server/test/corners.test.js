@@ -72,7 +72,7 @@ async function addQuestion(token, examId, overrides = {}) {
 async function openExam(token, examId, overrides = {}) {
   return base.patch(`/api/exams/${examId}/open`)
     .set('x-session-token', token)
-    .send(Object.assign({ duration_hours: 2 }, overrides));
+    .send(Object.assign({ duration_minutes: 120 }, overrides));
 }
 
 // ── Global setup ───────────────────────────────────────────────────────────
@@ -105,10 +105,10 @@ beforeAll(async () => {
 
   // Login seed accounts
   const [adminR, teacher1R, teacher2R, student1R] = await Promise.all([
-    login('admin',    'Admin@2025'),
-    login('proctor1', 'Proctor@01'),
-    login('teacher1', 'Teach@123'),
-    login('student1', 'Student@123'),
+    login('admin',      'Admin@2025'),
+    login('profsharma', 'Sharma#Prof1'),
+    login('profnair',   'Nair#Prof2'),
+    login('priyam',     'Priya@456'),
   ]);
   adminToken    = adminR.token;
   teacherToken  = teacher1R.token;
@@ -499,7 +499,7 @@ describe('PATCH /api/exams/:id/open — isDraft becomes false', () => {
   });
 
   test('isDraft is false and isActive is true after opening immediately', async () => {
-    const openRes = await openExam(teacherToken, examId, { duration_hours: 2 });
+    const openRes = await openExam(teacherToken, examId, { duration_minutes: 120 });
     expect(openRes.status).toBe(200);
 
     const examsRes = await base.get('/api/exams').set('x-session-token', teacherToken);
@@ -520,7 +520,7 @@ describe('PATCH /api/exams/:id/close', () => {
     const r = await createExam(teacherToken);
     examId = r.body.exam_id;
     await addQuestion(teacherToken, examId, { marks: 20 });
-    await openExam(teacherToken, examId, { duration_hours: 24 });
+    await openExam(teacherToken, examId, { duration_minutes: 1204 });
   });
 
   afterAll(async () => {
@@ -914,19 +914,19 @@ describe('PATCH /api/exams/:id/open — auth & ownership', () => {
   });
 
   test('returns 401 without token', async () => {
-    const res = await base.patch(`/api/exams/${examId}/open`).send({ duration_hours: 1 });
+    const res = await base.patch(`/api/exams/${examId}/open`).send({ duration_minutes: 60 });
     expect(res.status).toBe(401);
   });
 
   test('returns 403 for student', async () => {
     const res = await base.patch(`/api/exams/${examId}/open`)
-      .set('x-session-token', studentToken).send({ duration_hours: 1 });
+      .set('x-session-token', studentToken).send({ duration_minutes: 60 });
     expect(res.status).toBe(403);
   });
 
   test('returns 403 if teacher does not own exam', async () => {
     const res = await base.patch(`/api/exams/${examId}/open`)
-      .set('x-session-token', teacher2Token).send({ duration_hours: 1 });
+      .set('x-session-token', teacher2Token).send({ duration_minutes: 60 });
     expect(res.status).toBe(403);
   });
 });
@@ -1010,7 +1010,7 @@ describe('POST /api/proctor/warn', () => {
     const r = await createExam(teacherToken);
     examId = r.body.exam_id;
     await addQuestion(teacherToken, examId, { marks: 20 });
-    await openExam(teacherToken, examId, { duration_hours: 2 });
+    await openExam(teacherToken, examId, { duration_minutes: 120 });
 
     // Get join code
     const examsRes = await base.get('/api/exams').set('x-session-token', teacherToken);
@@ -1087,7 +1087,7 @@ describe('GET /api/attempts/:id/warnings', () => {
     const r = await createExam(teacherToken);
     examId = r.body.exam_id;
     await addQuestion(teacherToken, examId, { marks: 20 });
-    await openExam(teacherToken, examId, { duration_hours: 2 });
+    await openExam(teacherToken, examId, { duration_minutes: 120 });
 
     const examsRes = await base.get('/api/exams').set('x-session-token', teacherToken);
     const exam = examsRes.body.exams.find(e => e.id === examId);
@@ -1163,7 +1163,7 @@ describe('POST /api/proctor/kick/:attempt_id', () => {
     const r = await createExam(teacherToken);
     examId = r.body.exam_id;
     await addQuestion(teacherToken, examId, { marks: 20 });
-    await openExam(teacherToken, examId, { duration_hours: 2 });
+    await openExam(teacherToken, examId, { duration_minutes: 120 });
 
     const examsRes = await base.get('/api/exams').set('x-session-token', teacherToken);
     const exam = examsRes.body.exams.find(e => e.id === examId);
@@ -1235,7 +1235,7 @@ describe('POST /api/proctor-event', () => {
     const r = await createExam(teacherToken);
     examId = r.body.exam_id;
     await addQuestion(teacherToken, examId, { marks: 20 });
-    await openExam(teacherToken, examId, { duration_hours: 2 });
+    await openExam(teacherToken, examId, { duration_minutes: 120 });
 
     const examsRes = await base.get('/api/exams').set('x-session-token', teacherToken);
     const exam = examsRes.body.exams.find(e => e.id === examId);
@@ -1324,7 +1324,7 @@ describe('POST /api/attempts/:id/answer', () => {
       marks:         20,
     });
     questionId = qr.body.question_id;
-    await openExam(teacherToken, examId, { duration_hours: 2 });
+    await openExam(teacherToken, examId, { duration_minutes: 120 });
 
     const examsRes = await base.get('/api/exams').set('x-session-token', teacherToken);
     const exam = examsRes.body.exams.find(e => e.id === examId);
@@ -1379,7 +1379,7 @@ describe('POST /api/attempts/:id/submit', () => {
     const r = await createExam(teacherToken);
     examId = r.body.exam_id;
     await addQuestion(teacherToken, examId, { marks: 20 });
-    await openExam(teacherToken, examId, { duration_hours: 2 });
+    await openExam(teacherToken, examId, { duration_minutes: 120 });
 
     const examsRes = await base.get('/api/exams').set('x-session-token', teacherToken);
     const exam = examsRes.body.exams.find(e => e.id === examId);
@@ -1473,7 +1473,7 @@ describe('classroom/join — concurrent attempt guard', () => {
     const r = await createExam(teacherToken);
     examId = r.body.exam_id;
     await addQuestion(teacherToken, examId, { marks: 20 });
-    const openRes = await openExam(teacherToken, examId, { duration_hours: 2 });
+    const openRes = await openExam(teacherToken, examId, { duration_minutes: 120 });
     joinCode = openRes.body.join_code;
   });
 
@@ -1522,7 +1522,7 @@ describe('GET /api/results/:attempt_id', () => {
     const r = await createExam(teacherToken);
     examId = r.body.exam_id;
     await addQuestion(teacherToken, examId, { marks: 20 });
-    await openExam(teacherToken, examId, { duration_hours: 2 });
+    await openExam(teacherToken, examId, { duration_minutes: 120 });
 
     const examsRes = await base.get('/api/exams').set('x-session-token', teacherToken);
     const exam = examsRes.body.exams.find(e => e.id === examId);

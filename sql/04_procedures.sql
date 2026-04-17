@@ -1,16 +1,3 @@
--- ============================================================
---   STORED PROCEDURES  (8 total)
--- ============================================================
---   SP1  sp_start_exam              Student starts an exam
---   SP2  sp_submit_answer           Save / update one answer
---   SP3  sp_submit_exam             Finalise + score the attempt
---   SP4  sp_log_proctor_event       Front-end calls this to log events
---   SP5  sp_get_exam_results        Student views their results
---   SP6  sp_get_flagged_attempts    Proctor dashboard
---   SP7  sp_resolve_flag            Proctor closes a suspicion flag
---   SP8  sp_exam_analytics          Instructor summary report
--- ============================================================
-
 USE ExamProctor;
 
 DELIMITER //
@@ -239,8 +226,7 @@ END //
 -- ─────────────────────────────────────────────────────────────
 -- Returns two result sets:
 --   RS1 : Attempt summary (score, pass/fail, timing)
---   RS2 : Per-question breakdown (correct_answer shown only if
---         show_results_immediately = TRUE on the exam)
+--   RS2 : Per-question breakdown (correct_answer always shown after submission)
 -- ============================================================
 CREATE PROCEDURE sp_get_exam_results(
     IN p_attempt_id INT,
@@ -274,8 +260,7 @@ BEGIN
         q.question_text,
         q.question_type,
         sa.selected_option                                       AS your_answer,
-        CASE WHEN e.show_results_immediately THEN q.correct_answer
-             ELSE '[ Hidden ]' END                              AS correct_answer,
+        q.correct_answer,
         sa.is_correct,
         sa.marks_obtained,
         q.marks                                                 AS max_marks,
@@ -284,7 +269,6 @@ BEGIN
     FROM  StudentAnswers sa
     JOIN  Questions      q  ON sa.question_id  = q.question_id
     JOIN  ExamAttempts   ea ON sa.attempt_id   = ea.attempt_id
-    JOIN  Exams          e  ON ea.exam_id      = e.exam_id
     WHERE sa.attempt_id  = p_attempt_id
       AND ea.student_id  = p_student_id
     ORDER BY q.order_index;

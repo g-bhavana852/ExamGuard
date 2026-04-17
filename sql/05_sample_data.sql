@@ -39,22 +39,22 @@ DROP TRIGGER IF EXISTS trg_detect_multiple_logins;
 -- adityaj      Aditya@333      student
 -- kavyan       Kavya@444       student
 -- demostudent  Demo@Stu1       student  ← demo: flagged/submitted/timed_out/live
-INSERT INTO Users (user_id,email,password_hash,full_name,role,phone_number,username) VALUES
-(1, 'admin@examguard.edu',       'sha256:fcf7bb6d546cfb82d2e55486984ae7a1862a666acb441e0cf8b4ed34a4fcf9d7','System Admin',       'admin',  '9000000001','admin'),
-(2, 'prof.sharma@examguard.edu', 'sha256:5a5fda16b3cc1ed1ca6202c077e56c139b7558a7fff8e92b436c940f7098ba19','Prof. Anil Sharma',  'teacher','9000000002','profsharma'),
-(3, 'prof.nair@examguard.edu',   'sha256:3bb9bded22d4c7276a61a9ac2c6cb5b11747e7fc22041a004d36716858abd621','Prof. Meera Nair',   'teacher','9000000003','profnair'),
-(6, 'arjun.k@student.edu',       'sha256:255ea3b51c4ca0814a74e3c1a2392fcf20edeeabcd1b1e6bbc705dde02686ebb','Arjun Kumar',        'student','9111111101','arjunk'),
-(7, 'priya.m@student.edu',       'sha256:f060b432989eb45d741857dd316f4253dd08ae018fa0f5501e465bca056d576b','Priya Menon',        'student','9111111102','priyam'),
-(8, 'ravi.s@student.edu',        'sha256:9b112f399f26c2520d36ee19a21a721ccad9e9bb2ef5705832b3cd99604f7d64','Ravi Shankar',       'student','9111111103','ravis'),
-(9, 'isha.t@student.edu',        'sha256:cec7808ac6242f66945b859b3abe4c8f361e2e9c37e25c4bb14d2956cbf34245','Isha Trivedi',       'student','9111111104','ishat'),
-(10,'nikhil.d@student.edu',      'sha256:915de23da05f396d601fbfcb26273414871f5d3d9c5c0d0dc8de5dac80ddb262','Nikhil Desai',       'student','9111111105','nikhild'),
-(11,'ananya.b@student.edu',      'sha256:9ab5a9255bd28d604fd00884535ef8ea537e2ca5944454a613a315dfd0077ca3','Ananya Bose',        'student','9111111106','ananyab'),
-(12,'rohan.p@student.edu',       'sha256:9e38e6ff4249c37dc883c43f3c457109c83f43752856df02235628199c81acf0','Rohan Patel',        'student','9111111107','rohanp'),
-(13,'sneha.r@student.edu',       'sha256:40052b96694b02a89aad77fd4ac85a65c3c48b58ad9f2e189a1ef6752b8ff4b7','Sneha Reddy',        'student','9111111108','snehar'),
-(14,'aditya.j@student.edu',      'sha256:b4dbd140c0c1baa60cd4fa75fc6f458e4feb6aea795175c69a0fac91c1bfae97','Aditya Joshi',       'student','9111111109','adityaj'),
-(15,'kavya.n@student.edu',       'sha256:0eae0481abd972d7062db93cd1e217d83613a0e2d8922665a9deeb764099cbe7','Kavya Nair',         'student','9111111110','kavyan'),
-(20,'demo.prof@examguard.edu',   'sha256:1e123d4ab3c2396c747ce32b8ffeacf55e78dcdbfb4a1a386a056a8a151f1a81','Dr. Demo Professor', 'teacher','9000000020','demoprof'),
-(21,'demo.student@student.edu',  'sha256:76b1892b25a22a01964959e7f698131b0a4e0b0f97a51e869dbaa0d295be3d6a','Demo Student',       'student','9111111120','demostudent');
+INSERT INTO Users (user_id,email,password_hash,full_name,role,username) VALUES
+(1, 'admin@examguard.edu',       'sha256:fcf7bb6d546cfb82d2e55486984ae7a1862a666acb441e0cf8b4ed34a4fcf9d7','System Admin',       'admin',  'admin'),
+(2, 'prof.sharma@examguard.edu', 'sha256:5a5fda16b3cc1ed1ca6202c077e56c139b7558a7fff8e92b436c940f7098ba19','Prof. Anil Sharma',  'teacher','profsharma'),
+(3, 'prof.nair@examguard.edu',   'sha256:3bb9bded22d4c7276a61a9ac2c6cb5b11747e7fc22041a004d36716858abd621','Prof. Meera Nair',   'teacher','profnair'),
+(6, 'arjun.k@student.edu',       'sha256:255ea3b51c4ca0814a74e3c1a2392fcf20edeeabcd1b1e6bbc705dde02686ebb','Arjun Kumar',        'student','arjunk'),
+(7, 'priya.m@student.edu',       'sha256:f060b432989eb45d741857dd316f4253dd08ae018fa0f5501e465bca056d576b','Priya Menon',        'student','priyam'),
+(8, 'ravi.s@student.edu',        'sha256:9b112f399f26c2520d36ee19a21a721ccad9e9bb2ef5705832b3cd99604f7d64','Ravi Shankar',       'student','ravis'),
+(9, 'isha.t@student.edu',        'sha256:cec7808ac6242f66945b859b3abe4c8f361e2e9c37e25c4bb14d2956cbf34245','Isha Trivedi',       'student','ishat'),
+(10,'nikhil.d@student.edu',      'sha256:915de23da05f396d601fbfcb26273414871f5d3d9c5c0d0dc8de5dac80ddb262','Nikhil Desai',       'student','nikhild'),
+(11,'ananya.b@student.edu',      'sha256:9ab5a9255bd28d604fd00884535ef8ea537e2ca5944454a613a315dfd0077ca3','Ananya Bose',        'student','ananyab'),
+(12,'rohan.p@student.edu',       'sha256:9e38e6ff4249c37dc883c43f3c457109c83f43752856df02235628199c81acf0','Rohan Patel',        'student','rohanp'),
+(13,'sneha.r@student.edu',       'sha256:40052b96694b02a89aad77fd4ac85a65c3c48b58ad9f2e189a1ef6752b8ff4b7','Sneha Reddy',        'student','snehar'),
+(14,'aditya.j@student.edu',      'sha256:b4dbd140c0c1baa60cd4fa75fc6f458e4feb6aea795175c69a0fac91c1bfae97','Aditya Joshi',       'student','adityaj'),
+(15,'kavya.n@student.edu',       'sha256:0eae0481abd972d7062db93cd1e217d83613a0e2d8922665a9deeb764099cbe7','Kavya Nair',         'student','kavyan'),
+(20,'demo.prof@examguard.edu',   'sha256:1e123d4ab3c2396c747ce32b8ffeacf55e78dcdbfb4a1a386a056a8a151f1a81','Dr. Demo Professor', 'teacher','demoprof'),
+(21,'demo.student@student.edu',  'sha256:76b1892b25a22a01964959e7f698131b0a4e0b0f97a51e869dbaa0d295be3d6a','Demo Student',       'student','demostudent');
 
 
 -- ── COURSES ────────────────────────────────────────────────────
@@ -78,14 +78,14 @@ INSERT INTO Enrollments (student_id,course_id,status) VALUES
 -- E1/E2: past (closed) · E3: live DBMS · E4: upcoming DSA
 -- E5: past AI (demo)  · E6: live AI  · E7: upcoming AI
 INSERT INTO Exams (exam_id,course_id,title,total_marks,passing_marks,duration_minutes,
-    window_start,window_end,created_by,is_published,max_attempts,shuffle_questions,show_results_immediately,join_code) VALUES
-(1,1,'DBMS Mid-Term Examination',       50.00,25.00, 60,'2025-11-10 09:00:00','2025-11-10 12:00:00',2,TRUE,1,TRUE, FALSE,NULL),
-(2,2,'DSA Weekly Quiz - Trees & Graphs',20.00,10.00, 30,'2025-11-15 14:00:00','2025-11-15 16:00:00',3,TRUE,1,FALSE,TRUE, NULL),
-(3,1,'DBMS End-Term Examination',      100.00,50.00,120,'2026-03-13 08:00:00','2026-05-31 23:59:59',2,TRUE,1,TRUE, FALSE,'DB2026'),
-(4,2,'DSA Unit Test - Sorting Algorithms',30.00,15.00,45,'2027-01-10 10:00:00','2027-01-10 12:00:00',3,TRUE,1,FALSE,FALSE,NULL),
-(5,3,'AI Mid-Term Examination',         50.00,25.00, 60,'2025-12-10 09:00:00','2025-12-10 12:00:00',20,TRUE,2,TRUE, FALSE,NULL),
-(6,3,'AI End-Term Examination',        100.00,50.00,120,'2026-03-01 08:00:00','2026-05-31 23:59:59',20,TRUE,1,TRUE, FALSE,'AI2026'),
-(7,3,'AI Unit Test - Neural Networks',  30.00,15.00, 45,'2027-06-01 10:00:00','2027-06-01 12:00:00',20,TRUE,1,FALSE,FALSE,NULL);
+    window_start,window_end,created_by,is_published,max_attempts,shuffle_questions,join_code) VALUES
+(1,1,'DBMS Mid-Term Examination',       50.00,25.00, 60,'2025-11-10 09:00:00','2025-11-10 12:00:00',2,TRUE,1,TRUE, NULL),
+(2,2,'DSA Weekly Quiz - Trees & Graphs',20.00,10.00, 30,'2025-11-15 14:00:00','2025-11-15 16:00:00',3,TRUE,1,FALSE,NULL),
+(3,1,'DBMS End-Term Examination',      100.00,50.00,120,'2026-03-13 08:00:00','2026-05-31 23:59:59',2,TRUE,1,TRUE, 'DB2026'),
+(4,2,'DSA Unit Test - Sorting Algorithms',30.00,15.00,45,'2027-01-10 10:00:00','2027-01-10 12:00:00',3,TRUE,1,FALSE,NULL),
+(5,3,'AI Mid-Term Examination',         50.00,25.00, 60,'2025-12-10 09:00:00','2025-12-10 12:00:00',20,TRUE,2,TRUE, NULL),
+(6,3,'AI End-Term Examination',        100.00,50.00,120,'2026-03-01 08:00:00','2026-05-31 23:59:59',20,TRUE,1,TRUE, 'AI2026'),
+(7,3,'AI Unit Test - Neural Networks',  30.00,15.00, 45,'2027-06-01 10:00:00','2027-06-01 12:00:00',20,TRUE,1,FALSE,NULL);
 
 
 -- ── QUESTIONS — Exam 1: DBMS Mid-Term (10 MCQ × 5 marks) ──────

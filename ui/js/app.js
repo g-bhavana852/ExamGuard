@@ -845,7 +845,6 @@ async function showCreateExamModal() {
       <div class="form-row"><div class="form-group"><label>Max Attempts per student</label><input type="number" name="max_attempts" required min="1" value="1"/></div></div>
       <div class="form-checkrow">
         <label class="form-check"><input type="checkbox" name="shuffle_questions" checked/> Shuffle Questions</label>
-        <label class="form-check"><input type="checkbox" name="show_results_immediately"/> Show Results Immediately</label>
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -869,7 +868,6 @@ async function submitCreateExam(e) {
     window_end:   toDatetime(new Date(Date.now()+366*24*60*60*1000).toISOString().slice(0,16)),
     max_attempts: parseInt(form.max_attempts.value),
     shuffle_questions: form.shuffle_questions.checked,
-    show_results_immediately: form.show_results_immediately.checked,
     is_published: false,
   };
   try {
@@ -883,15 +881,15 @@ let _openExamId = null, _openExamTitle = null;
 
 function openExam(id, title, durationMin) {
   _openExamId = parseInt(id); _openExamTitle = title;
-  const defaultHrs = Math.max(1, Math.ceil((durationMin||60)/60 + 0.5));
+  const defaultMins = durationMin || 60;
   showModal(`Open Exam — ${title}`, `
     <div style="padding:8px 0 4px">
       <div style="font-size:13px;color:var(--text3);margin-bottom:20px;line-height:1.6;text-align:center">
         Publishing generates a <strong>join code</strong> for students.<br>Share it verbally — students enter it to start.
       </div>
       <div style="margin-bottom:18px">
-        <label style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:8px">Window duration (hours)</label>
-        <input id="open-hrs-input" type="number" min="0.5" max="72" step="0.5" value="${defaultHrs}"
+        <label style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:8px">Window duration (minutes)</label>
+        <input id="open-mins-input" type="number" min="1" max="4320" step="1" value="${defaultMins}"
           style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:15px">
         <div style="font-size:11px;color:var(--text3);margin-top:5px">Exam opens immediately. Students can join until the window expires or you end the session.</div>
       </div>
@@ -906,11 +904,11 @@ function openExam(id, title, durationMin) {
 async function confirmOpenExam() {
   const id = _openExamId, title = _openExamTitle;
   const btn = document.getElementById('open-exam-btn');
-  const hrs = parseFloat(document.getElementById('open-hrs-input')?.value||'2');
-  if (!hrs || hrs <= 0) return alert('Enter a valid number of hours.');
+  const mins = parseInt(document.getElementById('open-mins-input')?.value||'120');
+  if (!mins || mins <= 0) return alert('Enter a valid number of minutes.');
   btn.disabled = true; btn.textContent = 'Opening…';
   try {
-    const res  = await fetch(`/api/exams/${id}/open`, { method:'PATCH', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ duration_hours: hrs }) });
+    const res  = await fetch(`/api/exams/${id}/open`, { method:'PATCH', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ duration_minutes: mins }) });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error||`HTTP ${res.status}`);
     closeModal();
@@ -938,7 +936,7 @@ async function closeExam(id, title) {
   try {
     const res = await fetch(`/api/exams/${id}/close`, { method:'PATCH', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify({}) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    buildExams(); buildStudentView();
+    buildExams(); buildStudentView(); buildClassroom();
   } catch (err) { alert('Failed to close exam: ' + err.message); }
 }
 

@@ -637,7 +637,13 @@ route('get', '/api/student-view', async (req, res) => {
       FROM Enrollments enr
       JOIN Courses c ON enr.course_id = c.course_id
       JOIN Exams   e ON c.course_id   = e.course_id AND e.is_published = TRUE
-      LEFT JOIN ExamAttempts ea ON e.exam_id = ea.exam_id AND ea.student_id = ?
+      LEFT JOIN ExamAttempts ea ON ea.attempt_id = (
+        SELECT attempt_id FROM ExamAttempts
+        WHERE exam_id = e.exam_id AND student_id = ?
+        ORDER BY FIELD(status,'submitted','graded','flagged','timed_out','in_progress','abandoned') ASC,
+                 attempt_number DESC
+        LIMIT 1
+      )
       WHERE enr.student_id = ? AND enr.status = 'active'
       ORDER BY e.window_start DESC`,
       [student.user_id, student.user_id]
@@ -645,10 +651,10 @@ route('get', '/api/student-view', async (req, res) => {
 
     const now = new Date();
     const examCards = exams.map(e => {
-      const isSubmitted = e.status && e.status !== 'abandoned';
+      const isSubmitted = ['submitted','graded','flagged','timed_out'].includes(e.status);
       const isActive    = !isSubmitted && new Date(e.window_start) <= now && new Date(e.window_end) >= now;
       const isUpcoming  = !isSubmitted && new Date(e.window_start) > now;
-      const passed      = e.score >= e.passing_marks;
+      const passed      = e.score != null && parseFloat(e.score) >= parseFloat(e.passing_marks);
       const pct         = e.percentage || 0;
 
       let statusBadge, statusText, action;
@@ -1084,7 +1090,6 @@ route('get', '/api/exams', async (req, res) => {
         e.window_end,
         e.max_attempts,
         e.shuffle_questions,
-        e.show_results_immediately,
         (SELECT COUNT(*) FROM Questions q WHERE q.exam_id = e.exam_id)       AS question_count,
         (SELECT COALESCE(SUM(q.marks),0) FROM Questions q WHERE q.exam_id = e.exam_id) AS questions_marks_total,
         (SELECT COUNT(*) FROM ExamAttempts ea2 WHERE ea2.exam_id=e.exam_id AND ea2.status='in_progress') AS live_count,
@@ -1102,7 +1107,7 @@ route('get', '/api/exams', async (req, res) => {
       GROUP BY e.exam_id, e.title, e.description, e.join_code, e.is_published, c.course_code, c.course_name,
                u.full_name, e.total_marks, e.passing_marks, e.duration_minutes,
                e.window_start, e.window_end, e.max_attempts,
-               e.shuffle_questions, e.show_results_immediately
+               e.shuffle_questions
       ORDER BY e.window_start DESC`,
       ownerParams
     );
@@ -1150,7 +1155,6 @@ route('get', '/api/exams', async (req, res) => {
         avgScore:          r.avg_pct   || '—',
         passRate,
         shuffle:           r.shuffle_questions  ? 'Yes' : '—',
-        showResults:       r.show_results_immediately ? 'Yes' : '—',
         passingMarksRaw:   r.passing_marks,
         durationRaw:       r.duration_minutes,
         descriptionRaw:    r.description || '',
@@ -1478,7 +1482,7 @@ route('post', '/api/exams', async (req, res) => {
   const {
     course_id, title, description, total_marks, passing_marks,
     duration_minutes, window_start, window_end, max_attempts,
-    shuffle_questions, show_results_immediately, is_published,
+    shuffle_questions, is_published,
   } = req.body;
 
   const { userId: created_by, roles: creatorRoles } = await getUserWithRole(req);
@@ -1508,12 +1512,12 @@ route('post', '/api/exams', async (req, res) => {
     `INSERT INTO Exams
        (course_id, title, description, total_marks, passing_marks,
         duration_minutes, window_start, window_end, max_attempts,
-        shuffle_questions, show_results_immediately, is_published, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        shuffle_questions, is_published, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       course_id, title, description || null, tm, pm,
       dur, window_start, window_end, max_attempts || 1,
-      shuffle_questions ? 1 : 0, show_results_immediately ? 1 : 0, is_published ? 1 : 0,
+      shuffle_questions ? 1 : 0, is_published ? 1 : 0,
       created_by,
     ]
   );
@@ -1547,14 +1551,14 @@ route('delete', '/api/exams/:id', async (req, res) => {
 });
 
 // ── PATCH /api/exams/:id/open ─────────────────────────────────
-// Opens an exam immediately. Body: { duration_hours }
+// Opens an exam immediately. Body: { duration_minutes }
 route('patch', '/api/exams/:id/open', async (req, res) => {
   const { userId, role, roles } = await getUserWithRole(req);
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
   if (!hasAnyRole(roles, 'teacher', 'admin'))
     return res.status(403).json({ error: 'Only teachers and admins can open exams' });
   const examId      = parseInt(req.params.id);
-  const durationHrs = parseFloat(req.body.duration_hours) || 2;
+  const durationMins = parseInt(req.body.duration_minutes) || 120;
 
   // Ownership check
   if (role === 'teacher') {
@@ -1603,9 +1607,9 @@ route('patch', '/api/exams/:id/open', async (req, res) => {
     `UPDATE Exams
      SET is_published = TRUE,
          window_start = NOW(),
-         window_end   = DATE_ADD(NOW(), INTERVAL ? HOUR)
+         window_end   = DATE_ADD(NOW(), INTERVAL ? MINUTE)
      WHERE exam_id = ?`,
-    [durationHrs, examId]
+    [durationMins, examId]
   );
 
   res.json({ success: true, join_code });
@@ -1627,7 +1631,7 @@ route('patch', '/api/exams/:id/close', async (req, res) => {
   }
 
   await pool.execute(
-    `UPDATE Exams SET window_end = NOW() WHERE exam_id = ?`,
+    `UPDATE Exams SET window_end = GREATEST(NOW(), DATE_ADD(window_start, INTERVAL 1 SECOND)) WHERE exam_id = ?`,
     [examId]
   );
   res.json({ success: true });
@@ -2030,8 +2034,8 @@ route('post', '/api/classroom/create', async (req, res) => {
     `INSERT INTO Exams
        (course_id, title, total_marks, passing_marks, duration_minutes,
         window_start, window_end, created_by, is_published, max_attempts,
-        shuffle_questions, show_results_immediately, join_code)
-     VALUES (?,?,?,?,?,NOW(),DATE_ADD(NOW(), INTERVAL 8 HOUR),?,TRUE,99,FALSE,FALSE,?)`,
+        shuffle_questions, join_code)
+     VALUES (?,?,?,?,?,NOW(),DATE_ADD(NOW(), INTERVAL 480 MINUTE),?,TRUE,99,FALSE,?)`,
     [course_id, title, total_marks, passing_marks, duration_minutes, userId, join_code]
   );
 
@@ -2268,7 +2272,7 @@ route('post', '/api/attempts/:id/submit', async (req, res) => {
       success:       true,
       score,
       percentage,
-      passed:        score >= attempt.passing_marks,
+      passed:        score >= parseFloat(attempt.passing_marks),
       total_marks:   attempt.total_marks,
       passing_marks: attempt.passing_marks,
       title:         attempt.title,

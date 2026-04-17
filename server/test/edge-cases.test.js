@@ -85,15 +85,15 @@ async function login(username, password) {
 
 async function setup() {
   [adminToken, teacherToken, studentToken, student2Token] = await Promise.all([
-    login('admin',    'Admin@2025'),
-    login('proctor1', 'Proctor@01'),
-    login('student1', 'Student@123'),
-    login('student2', 'Student@123'),
+    login('admin',      'Admin@2025'),
+    login('profsharma', 'Sharma#Prof1'),
+    login('priyam',     'Priya@456'),
+    login('ravis',      'Ravi@789'),
   ]);
   const [t, s, s2] = await Promise.all([
-    pool.execute(`SELECT user_id FROM Users WHERE username='proctor1'`),
-    pool.execute(`SELECT user_id FROM Users WHERE username='student1'`),
-    pool.execute(`SELECT user_id FROM Users WHERE username='student2'`),
+    pool.execute(`SELECT user_id FROM Users WHERE username='profsharma'`),
+    pool.execute(`SELECT user_id FROM Users WHERE username='priyam'`),
+    pool.execute(`SELECT user_id FROM Users WHERE username='ravis'`),
   ]);
   teacherUserId  = t[0][0]?.user_id;
   studentUserId  = s[0][0]?.user_id;
@@ -264,7 +264,7 @@ describe('Teacher role access control', () => {
   test('student blocked from PATCH /api/exams/:id/open (403)', async () => {
     const res = await base.patch('/api/exams/3/open')
       .set('x-session-token', studentToken)
-      .send({ duration_hours: 2 });
+      .send({ duration_minutes: 120 });
     expect(res.status).toBe(403);
   });
 
@@ -342,7 +342,7 @@ describe('Exam open → join_code generation', () => {
     // Use a different exam ID that the student doesn't own; any non-existent is fine
     const res = await base.patch('/api/exams/999999/open')
       .set('x-session-token', studentToken)
-      .send({ duration_hours: 2 });
+      .send({ duration_minutes: 120 });
     expect(res.status).toBe(403);
   });
 
@@ -354,7 +354,7 @@ describe('Exam open → join_code generation', () => {
 
     const res = await base.patch(`/api/exams/${testExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 2 });
+      .send({ duration_minutes: 120 });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body).toHaveProperty('join_code');
@@ -369,7 +369,7 @@ describe('Exam open → join_code generation', () => {
 
     const res = await base.patch(`/api/exams/${testExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(200);
     expect(res.body.join_code).toBe(existingCode);
   });
@@ -1088,7 +1088,7 @@ describe('Results visibility — student isolation', () => {
     expect(res.status).toBe(200);
     for (const exam of res.body.exams) {
       for (const s of exam.students) {
-        expect(s.name).toBe('Student One'); // student1 only
+        expect(s.name).toBe('Priya Menon'); // priyam only
       }
     }
   });
@@ -1128,8 +1128,8 @@ describe('Results visibility — student isolation', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('Concurrent login detection (T7)', () => {
   test('two consecutive logins produce two different tokens', async () => {
-    const t1 = await login('student1', 'Student@123');
-    const t2 = await login('student1', 'Student@123');
+    const t1 = await login('priyam', 'Priya@456');
+    const t2 = await login('priyam', 'Priya@456');
     expect(t1).not.toBe(t2);
     expect(typeof t1).toBe('string');
     expect(t1.length).toBeGreaterThanOrEqual(32);
@@ -1137,8 +1137,8 @@ describe('Concurrent login detection (T7)', () => {
 
   test('T7 fires on second login — SuspicionFlag or ProctorLog row is created (or MULTIPLE_LOGIN_DETECTED in logs)', async () => {
     // Two logins from the same user triggers T7
-    await login('student2', 'Student@123');
-    await login('student2', 'Student@123');
+    await login('ravis', 'Ravi@789');
+    await login('ravis', 'Ravi@789');
     // Give DB a moment to process triggers
     await new Promise(r => setTimeout(r, 100));
 
@@ -1146,7 +1146,7 @@ describe('Concurrent login detection (T7)', () => {
       `SELECT COUNT(*) AS cnt FROM ProctorLogs pl
        JOIN ExamAttempts ea ON pl.attempt_id = ea.attempt_id
        JOIN Users u ON ea.student_id = u.user_id
-       WHERE u.username='student2' AND pl.event_type='MULTIPLE_LOGIN_DETECTED'
+       WHERE u.username='ravis' AND pl.event_type='MULTIPLE_LOGIN_DETECTED'
        ORDER BY pl.log_id DESC LIMIT 1`
     );
     // Either the trigger fired or the student has no active attempt — both are valid
@@ -1309,7 +1309,7 @@ describe('Exam open guards (questions + marks + scheduling)', () => {
     if (!guardExamId) return;
     const res = await base.patch(`/api/exams/${guardExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/no questions/i);
   });
@@ -1326,7 +1326,7 @@ describe('Exam open guards (questions + marks + scheduling)', () => {
       });
     const res = await base.patch(`/api/exams/${guardExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/mismatch/i);
   });
@@ -1343,7 +1343,7 @@ describe('Exam open guards (questions + marks + scheduling)', () => {
       });
     const res = await base.patch(`/api/exams/${guardExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('join_code');
     expect(res.body.join_code).toMatch(/^[A-Z0-9]{6}$/);
@@ -1354,7 +1354,7 @@ describe('Exam open guards (questions + marks + scheduling)', () => {
     const tooSoon = new Date(Date.now() + 3 * 60 * 1000).toISOString(); // 3 min from now
     const res = await base.patch(`/api/exams/${guardExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1, scheduled_at: tooSoon });
+      .send({ duration_minutes: 60, scheduled_at: tooSoon });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/10 minutes/i);
   });
@@ -1364,7 +1364,7 @@ describe('Exam open guards (questions + marks + scheduling)', () => {
     const future = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 min from now
     const res = await base.patch(`/api/exams/${guardExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1, scheduled_at: future });
+      .send({ duration_minutes: 60, scheduled_at: future });
     expect(res.status).toBe(200);
     expect(res.body.scheduled).toBe(true);
     expect(res.body).toHaveProperty('join_code');
@@ -1536,7 +1536,7 @@ describe('correct_answer is optional when adding questions', () => {
     // 3 questions were added (10+10+10=30), exam total_marks=30 — should match
     const res = await base.patch(`/api/exams/${optExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('join_code');
   });
@@ -1633,7 +1633,7 @@ describe('Join code end-to-end flow', () => {
     if (!e2eExamId) return;
     const res = await base.patch(`/api/exams/${e2eExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(200);
     expect(res.body.join_code).toBe(e2eCode); // same code preserved
   });
@@ -1668,7 +1668,7 @@ describe('Scheduled exam — window enforcement', () => {
     const future = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     await base.patch(`/api/exams/${schedExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1, scheduled_at: future });
+      .send({ duration_minutes: 60, scheduled_at: future });
   });
 
   afterAll(async () => {
@@ -1714,7 +1714,7 @@ describe('Scheduled exam — window enforcement', () => {
     const tooSoon = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     const res = await base.patch(`/api/exams/${schedExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1, scheduled_at: tooSoon });
+      .send({ duration_minutes: 60, scheduled_at: tooSoon });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/10 minutes/i);
   });
@@ -1724,7 +1724,7 @@ describe('Scheduled exam — window enforcement', () => {
     // Open immediately (no scheduled_at) — overrides future window_start
     const res = await base.patch(`/api/exams/${schedExamId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(200);
     expect(res.body.scheduled).toBe(false);
   });
@@ -1747,7 +1747,7 @@ describe('Scheduled exam — window enforcement', () => {
     const emptyId = cr.body.exam_id;
     const res = await base.patch(`/api/exams/${emptyId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/no questions/i);
     await pool.execute(`DELETE FROM Exams WHERE exam_id=?`, [emptyId]).catch(() => {});
@@ -1768,7 +1768,7 @@ describe('Scheduled exam — window enforcement', () => {
       });
     const res = await base.patch(`/api/exams/${mismatchId}/open`)
       .set('x-session-token', teacherToken)
-      .send({ duration_hours: 1 });
+      .send({ duration_minutes: 60 });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/mismatch/i);
     await pool.execute(`DELETE FROM Questions WHERE exam_id=?`, [mismatchId]).catch(() => {});

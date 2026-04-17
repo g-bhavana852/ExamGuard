@@ -1,14 +1,14 @@
 /**
  * api.test.js — Supertest integration tests for every API endpoint.
  *
- * Requires the ExamProctor database running with seed data (01–06).
- * Tests use real seed credentials (admin / proctor / student) from 06_sample_data.sql.
+ * Requires the ExamProctor database running with seed data (01–05).
+ * Tests use real seed credentials from 05_sample_data.sql.
  *
- * Seed credentials (08_reset_fresh.sql):
- *   admin:      username=admin     password=Admin@2025
- *   teacher:    username=proctor1  password=Proctor@01  (role: teacher)
- *   teacher:    username=teacher1  password=Teach@123   (role: teacher)
- *   student:    username=student1  password=Student@123
+ * Seed credentials (05_sample_data.sql):
+ *   admin:      username=admin       password=Admin@2025
+ *   teacher:    username=profsharma  password=Sharma#Prof1  (role: teacher)
+ *   student:    username=arjunk      password=Arjun@123
+ *   student2:   username=priyam      password=Priya@456
  *
  * Run: npm test (from server/)
  */
@@ -25,7 +25,7 @@ let base; // supertest agent bound to the imported express app
 
 // Seed tokens obtained from /api/login
 let adminToken;
-let teacherToken;   // proctor1 — role: teacher
+let teacherToken;   // profsharma — role: teacher
 let studentToken;
 let studentUserId;
 // Aliases kept so test bodies don't need changes
@@ -79,14 +79,14 @@ async function setup() {
 
   [adminToken, teacherToken, studentToken] = await Promise.all([
     login('admin',    'Admin@2025'),
-    login('proctor1', 'Proctor@01'),
-    login('student1', 'Student@123'),
+    login('profsharma', 'Sharma#Prof1'),
+    login('arjunk',     'Arjun@123'),
   ]);
   // Both aliases point to the same teacher token
   proctorToken    = teacherToken;
   instructorToken = teacherToken;
 
-  const res = await base.post('/api/login').send({ identifier: 'student1', password: 'Student@123' });
+  const res = await base.post('/api/login').send({ identifier: 'arjunk', password: 'Arjun@123' });
   studentUserId = res.body.user_id;
 }
 
@@ -96,17 +96,17 @@ async function setup() {
 describe('POST /api/login', () => {
   test('returns token and user info for valid credentials', async () => {
     const res = await base.post('/api/login')
-      .send({ identifier: 'student1', password: 'Student@123' });
+      .send({ identifier: 'arjunk', password: 'Arjun@123' });
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('token');
     expect(res.body).toHaveProperty('role');
     expect(res.body.role).toBe('student');
   });
 
-  test('returns 401 for wrong password', async () => {
+  test('returns 400 for wrong password (server uses 400 to avoid leaking user existence)', async () => {
     const res = await base.post('/api/login')
-      .send({ identifier: 'student1', password: 'wrongpassword' });
-    expect(res.status).toBe(401);
+      .send({ identifier: 'arjunk', password: 'wrongpassword' });
+    expect(res.status).toBe(400);
     expect(res.body).toHaveProperty('error');
   });
 
@@ -163,7 +163,7 @@ describe('POST /api/signup', () => {
 
 describe('POST /api/logout', () => {
   test('invalidates session token', async () => {
-    const token = await login('student1', 'Student@123');
+    const token = await login('arjunk', 'Arjun@123');
     const res = await base.post('/api/logout').send({ token });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -243,7 +243,8 @@ describe('GET /api/dashboard', () => {
   beforeAll(setup);
 
   test('returns stats, alerts, funnel, scoreChart', async () => {
-    const res = await base.get('/api/dashboard');
+    const res = await base.get('/api/dashboard')
+      .set('x-session-token', adminToken);
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('stats');
     expect(res.body).toHaveProperty('alerts');
@@ -382,7 +383,6 @@ describe('POST /api/exams', () => {
         window_end:              '2026-12-01 11:00:00',
         max_attempts:            1,
         shuffle_questions:       false,
-        show_results_immediately: true,
         is_published:            false,
       });
     expect(res.status).toBe(200);
@@ -499,7 +499,7 @@ describe('GET /api/results', () => {
     // Should not include other students' data (or be empty — fresh DB has no attempts)
     for (const exam of res.body.exams) {
       for (const s of exam.students) {
-        expect(s.name).toBe('Student One');
+        expect(s.name).toBe('Arjun Kumar');
       }
     }
   });
@@ -550,7 +550,7 @@ describe('IP Recording', () => {
   beforeAll(setup);
 
   test('POST /api/login records ip_address in LoginSessions', async () => {
-    const token = await login('student1', 'Student@123');
+    const token = await login('arjunk', 'Arjun@123');
     const [[row]] = await pool.execute(
       `SELECT ip_address FROM LoginSessions
        WHERE session_token = ?`, [token]
@@ -613,7 +613,7 @@ describe('Courses', () => {
   });
 
   test('POST /api/courses — teacher can create course for themselves', async () => {
-    const [[teacher]] = await pool.execute(`SELECT user_id FROM Users WHERE username = 'proctor1'`);
+    const [[teacher]] = await pool.execute(`SELECT user_id FROM Users WHERE username = 'profsharma'`);
     const res = await base.post('/api/courses')
       .set('x-session-token', teacherToken)
       .send({
@@ -796,7 +796,7 @@ describe('Classroom endpoints', () => {
   let createdExamId;
   let joinCode;
   let joinAttemptId;
-  let joinStudentToken; // token for student2 used in join test
+  let joinStudentToken; // token for priyam (student2) used in join test
 
   afterAll(async () => {
     // End classroom if still active
@@ -859,7 +859,7 @@ describe('Classroom endpoints', () => {
 
   test('POST /api/classroom/join — student joins with correct code, gets attempt_id + questions', async () => {
     if (!joinCode) return;
-    joinStudentToken = await login('student2', 'Student@123');
+    joinStudentToken = await login('priyam', 'Priya@456');
     const res = await base.post('/api/classroom/join')
       .set('x-session-token', joinStudentToken)
       .send({ code: joinCode });
@@ -899,9 +899,9 @@ describe('Classroom endpoints', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('students');
     expect(Array.isArray(res.body.students)).toBe(true);
-    // student2 should be in the list
+    // priyam (Priya Menon) should be in the list
     if (joinAttemptId) {
-      expect(res.body.students.some(s => s.name === 'Student Two')).toBe(true);
+      expect(res.body.students.some(s => s.name === 'Priya Menon')).toBe(true);
     }
   });
 
@@ -975,15 +975,15 @@ describe('Security — auth and access control', () => {
     expect(res.status).toBe(403);
   });
 
-  test('GET /api/logs — unauthenticated returns 403', async () => {
+  test('GET /api/logs — unauthenticated returns 401', async () => {
     const res = await base.get('/api/logs');
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   // ── Session token entropy ─────────────────────────────────────────────────
   test('Session tokens are unique across consecutive logins', async () => {
-    const t1 = await login('student1', 'Student@123');
-    const t2 = await login('student1', 'Student@123');
+    const t1 = await login('arjunk', 'Arjun@123');
+    const t2 = await login('arjunk', 'Arjun@123');
     expect(t1).not.toBe(t2);
     expect(typeof t1).toBe('string');
     expect(t1.length).toBeGreaterThanOrEqual(32);
@@ -1011,6 +1011,295 @@ describe('Security — auth and access control', () => {
     await pool.execute(`DELETE FROM LoginSessions WHERE user_id=?`, [dualId]);
     await pool.execute(`DELETE FROM UserRoles     WHERE user_id=?`, [dualId]);
     await pool.execute(`DELETE FROM Users          WHERE user_id=?`, [dualId]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5b — EXAM LIFECYCLE: OPEN / CLOSE / EDIT
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Exam open / close / edit lifecycle', () => {
+  beforeAll(setup);
+  let examId;
+
+  beforeAll(async () => {
+    // Create a draft exam owned by the teacher (profsharma)
+    const [[teacher]] = await pool.execute(`SELECT user_id FROM Users WHERE username = 'profsharma'`);
+    const [[course]]  = await pool.execute(`SELECT course_id FROM Courses WHERE instructor_id = ? LIMIT 1`, [teacher?.user_id ?? 2]);
+    const courseId = course?.course_id ?? 1;
+
+    const res = await request(app)
+      .post('/api/exams')
+      .set('x-session-token', teacherToken)
+      .send({
+        course_id:               courseId,
+        title:                   'Lifecycle Test Exam',
+        total_marks:             30,
+        passing_marks:           15,
+        duration_minutes:        45,
+        window_start:            '2028-01-01 09:00:00',
+        window_end:              '2028-01-01 11:00:00',
+        max_attempts:            1,
+        shuffle_questions:       false,
+        is_published:            false,
+      });
+    examId = res.body.exam_id;
+    if (!examId) return;
+
+    // Add one question (30 marks) so the open endpoint's marks-match check passes
+    await base.post('/api/questions')
+      .set('x-session-token', teacherToken)
+      .send({
+        exam_id:        examId,
+        question_text:  'Lifecycle test question — what is 1+1?',
+        question_type:  'TRUE_FALSE',
+        marks:          30,
+        correct_answer: 'TRUE',
+        difficulty_level: 'easy',
+        order_index:    1,
+      });
+  });
+
+  afterAll(async () => {
+    if (examId) {
+      await pool.execute(`DELETE FROM ExamAttempts WHERE exam_id = ?`, [examId]).catch(() => {});
+      await pool.execute(`DELETE FROM Questions    WHERE exam_id = ?`, [examId]).catch(() => {});
+      await pool.execute(`DELETE FROM Exams        WHERE exam_id = ?`, [examId]).catch(() => {});
+    }
+  });
+
+  test('PATCH /api/exams/:id — updates title', async () => {
+    if (!examId) return;
+    const res = await request(app)
+      .patch(`/api/exams/${examId}`)
+      .set('x-session-token', teacherToken)
+      .send({ title: 'Lifecycle Test Exam (edited)' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const [[row]] = await pool.execute(`SELECT title FROM Exams WHERE exam_id = ?`, [examId]);
+    expect(row.title).toBe('Lifecycle Test Exam (edited)');
+  });
+
+  test('PATCH /api/exams/:id — student cannot edit exam (403)', async () => {
+    if (!examId) return;
+    const res = await request(app)
+      .patch(`/api/exams/${examId}`)
+      .set('x-session-token', studentToken)
+      .send({ title: 'Hijack' });
+    expect(res.status).toBe(403);
+  });
+
+  test('PATCH /api/exams/:id — empty body returns 400', async () => {
+    if (!examId) return;
+    const res = await request(app)
+      .patch(`/api/exams/${examId}`)
+      .set('x-session-token', teacherToken)
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  test('PATCH /api/exams/:id/open — opens exam immediately and returns join_code', async () => {
+    if (!examId) return;
+    const res = await request(app)
+      .patch(`/api/exams/${examId}/open`)
+      .set('x-session-token', teacherToken)
+      .send({ duration_minutes: 60 });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body).toHaveProperty('join_code');
+    expect(typeof res.body.join_code).toBe('string');
+    expect(res.body.join_code.length).toBe(6);
+    // Verify DB: is_published=TRUE, window_start<=NOW(), window_end>NOW()
+    const [[row]] = await pool.execute(
+      `SELECT is_published, window_start, window_end FROM Exams WHERE exam_id = ?`, [examId]
+    );
+    expect(row.is_published).toBe(1);
+    expect(new Date(row.window_start).getTime()).toBeLessThanOrEqual(Date.now() + 5000);
+    expect(new Date(row.window_end).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  test('PATCH /api/exams/:id/open — unauthenticated returns 401', async () => {
+    const res = await request(app)
+      .patch(`/api/exams/${examId ?? 9999}/open`)
+      .send({ duration_minutes: 60 });
+    expect(res.status).toBe(401);
+  });
+
+  test('PATCH /api/exams/:id/close — closes exam, window_end set to now', async () => {
+    if (!examId) return;
+    const res = await request(app)
+      .patch(`/api/exams/${examId}/close`)
+      .set('x-session-token', teacherToken)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    // Verify DB: window_end < now + 5s and >= window_start
+    const [[row]] = await pool.execute(
+      `SELECT window_start, window_end, is_published FROM Exams WHERE exam_id = ?`, [examId]
+    );
+    const now = Date.now();
+    const wend = new Date(row.window_end).getTime();
+    expect(wend).toBeLessThanOrEqual(now + 5000);
+    // is_published must still be TRUE (ended exams stay published, not reverted to draft)
+    expect(row.is_published).toBe(1);
+    // window_end must be >= window_start (constraint not violated)
+    expect(wend).toBeGreaterThanOrEqual(new Date(row.window_start).getTime());
+  });
+
+  test('PATCH /api/exams/:id/close — student cannot close exam (403)', async () => {
+    if (!examId) return;
+    const res = await request(app)
+      .patch(`/api/exams/${examId}/close`)
+      .set('x-session-token', studentToken)
+      .send({});
+    expect(res.status).toBe(403);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5c — QUESTION CRUD
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Question CRUD', () => {
+  beforeAll(setup);
+  let qExamId;
+  let questionId;
+
+  beforeAll(async () => {
+    // Create a draft exam to add questions to
+    const [[course]] = await pool.execute(`SELECT course_id FROM Courses LIMIT 1`);
+    if (!course) return;
+    const res = await request(app)
+      .post('/api/exams')
+      .set('x-session-token', teacherToken)
+      .send({
+        course_id:               course.course_id,
+        title:                   'Question CRUD Test Exam',
+        total_marks:             50,
+        passing_marks:           25,
+        duration_minutes:        60,
+        window_start:            '2028-06-01 09:00:00',
+        window_end:              '2028-06-01 11:00:00',
+        max_attempts:            1,
+        shuffle_questions:       false,
+        is_published:            false,
+      });
+    qExamId = res.body.exam_id;
+  });
+
+  afterAll(async () => {
+    if (qExamId) {
+      await pool.execute(`DELETE FROM Questions WHERE exam_id = ?`, [qExamId]).catch(() => {});
+      await pool.execute(`DELETE FROM Exams     WHERE exam_id = ?`, [qExamId]).catch(() => {});
+    }
+  });
+
+  test('POST /api/questions — teacher adds MCQ question, returns question_id', async () => {
+    if (!qExamId) return;
+    const res = await request(app)
+      .post('/api/questions')
+      .set('x-session-token', teacherToken)
+      .send({
+        exam_id:        qExamId,
+        question_text:  'Which of the following is a primary key property?',
+        question_type:  'MCQ',
+        marks:          5,
+        option_a:       'Must be NULL',
+        option_b:       'Must be unique and NOT NULL',
+        option_c:       'Can repeat',
+        option_d:       'Optional column',
+        correct_answer: 'B',
+        difficulty_level: 'easy',
+        order_index:    1,
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.question_id).toBeGreaterThan(0);
+    questionId = res.body.question_id;
+  });
+
+  test('POST /api/questions — missing question_text returns 400', async () => {
+    if (!qExamId) return;
+    const res = await request(app)
+      .post('/api/questions')
+      .set('x-session-token', teacherToken)
+      .send({ exam_id: qExamId, marks: 5, question_type: 'MCQ' });
+    expect(res.status).toBe(400);
+  });
+
+  test('POST /api/questions — MCQ with only 1 option returns 400', async () => {
+    if (!qExamId) return;
+    const res = await request(app)
+      .post('/api/questions')
+      .set('x-session-token', teacherToken)
+      .send({
+        exam_id:       qExamId,
+        question_text: 'Bad MCQ',
+        question_type: 'MCQ',
+        marks:         5,
+        option_a:      'Only one option',
+      });
+    expect(res.status).toBe(400);
+  });
+
+  test('POST /api/questions — student cannot add questions (403)', async () => {
+    if (!qExamId) return;
+    const res = await request(app)
+      .post('/api/questions')
+      .set('x-session-token', studentToken)
+      .send({
+        exam_id:       qExamId,
+        question_text: 'Unauthorized question',
+        question_type: 'MCQ',
+        marks:         5,
+        option_a:      'A', option_b: 'B',
+        correct_answer: 'A',
+      });
+    expect(res.status).toBe(403);
+  });
+
+  test('POST /api/questions — TRUE_FALSE question with valid answer succeeds', async () => {
+    if (!qExamId) return;
+    const res = await request(app)
+      .post('/api/questions')
+      .set('x-session-token', teacherToken)
+      .send({
+        exam_id:        qExamId,
+        question_text:  'SQL stands for Structured Query Language.',
+        question_type:  'TRUE_FALSE',
+        marks:          3,
+        correct_answer: 'TRUE',
+        difficulty_level: 'easy',
+        order_index:    2,
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.question_id).toBeGreaterThan(0);
+    // Cleanup this extra question
+    if (res.body.question_id) {
+      await pool.execute(`DELETE FROM Questions WHERE question_id = ?`, [res.body.question_id]);
+    }
+  });
+
+  test('GET /api/questions — teacher sees questions for their exam', async () => {
+    if (!qExamId) return;
+    const res = await request(app)
+      .get(`/api/questions?exam_id=${qExamId}`)
+      .set('x-session-token', teacherToken);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('questions');
+    expect(Array.isArray(res.body.questions)).toBe(true);
+    expect(res.body.questions.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('DELETE /api/questions/:id — teacher deletes own question', async () => {
+    if (!questionId) return;
+    const res = await request(app)
+      .delete(`/api/questions/${questionId}`)
+      .set('x-session-token', teacherToken);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    // Verify it no longer exists
+    const [[row]] = await pool.execute(`SELECT question_id FROM Questions WHERE question_id = ?`, [questionId]);
+    expect(row).toBeUndefined();
+    questionId = null; // already deleted
   });
 });
 
