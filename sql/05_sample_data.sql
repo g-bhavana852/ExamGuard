@@ -78,14 +78,14 @@ INSERT INTO Enrollments (student_id,course_id,status) VALUES
 -- E1/E2: past (closed) · E3: live DBMS · E4: upcoming DSA
 -- E5: past AI (demo)  · E6: live AI  · E7: upcoming AI
 INSERT INTO Exams (exam_id,course_id,title,total_marks,passing_marks,duration_minutes,
-    window_start,window_end,created_by,is_published,max_attempts,shuffle_questions,show_results_immediately) VALUES
-(1,1,'DBMS Mid-Term Examination',       50.00,25.00, 60,'2025-11-10 09:00:00','2025-11-10 12:00:00',2,TRUE,1,TRUE, FALSE),
-(2,2,'DSA Weekly Quiz - Trees & Graphs',20.00,10.00, 30,'2025-11-15 14:00:00','2025-11-15 16:00:00',3,TRUE,1,FALSE,TRUE),
-(3,1,'DBMS End-Term Examination',      100.00,50.00,120,'2026-03-13 08:00:00','2030-12-31 23:59:59',2,TRUE,1,TRUE, FALSE),
-(4,2,'DSA Unit Test - Sorting Algorithms',30.00,15.00,45,'2027-01-10 10:00:00','2027-01-10 12:00:00',3,TRUE,1,FALSE,FALSE),
-(5,3,'AI Mid-Term Examination',         50.00,25.00, 60,'2025-12-10 09:00:00','2025-12-10 12:00:00',20,TRUE,2,TRUE, FALSE),
-(6,3,'AI End-Term Examination',        100.00,50.00,120,'2026-03-01 08:00:00','2030-12-31 23:59:59',20,TRUE,1,TRUE, FALSE),
-(7,3,'AI Unit Test - Neural Networks',  30.00,15.00, 45,'2027-06-01 10:00:00','2027-06-01 12:00:00',20,TRUE,1,FALSE,FALSE);
+    window_start,window_end,created_by,is_published,max_attempts,shuffle_questions,show_results_immediately,join_code) VALUES
+(1,1,'DBMS Mid-Term Examination',       50.00,25.00, 60,'2025-11-10 09:00:00','2025-11-10 12:00:00',2,TRUE,1,TRUE, FALSE,NULL),
+(2,2,'DSA Weekly Quiz - Trees & Graphs',20.00,10.00, 30,'2025-11-15 14:00:00','2025-11-15 16:00:00',3,TRUE,1,FALSE,TRUE, NULL),
+(3,1,'DBMS End-Term Examination',      100.00,50.00,120,'2026-03-13 08:00:00','2026-05-31 23:59:59',2,TRUE,1,TRUE, FALSE,'DB2026'),
+(4,2,'DSA Unit Test - Sorting Algorithms',30.00,15.00,45,'2027-01-10 10:00:00','2027-01-10 12:00:00',3,TRUE,1,FALSE,FALSE,NULL),
+(5,3,'AI Mid-Term Examination',         50.00,25.00, 60,'2025-12-10 09:00:00','2025-12-10 12:00:00',20,TRUE,2,TRUE, FALSE,NULL),
+(6,3,'AI End-Term Examination',        100.00,50.00,120,'2026-03-01 08:00:00','2026-05-31 23:59:59',20,TRUE,1,TRUE, FALSE,'AI2026'),
+(7,3,'AI Unit Test - Neural Networks',  30.00,15.00, 45,'2027-06-01 10:00:00','2027-06-01 12:00:00',20,TRUE,1,FALSE,FALSE,NULL);
 
 
 -- ── QUESTIONS — Exam 1: DBMS Mid-Term (10 MCQ × 5 marks) ──────
@@ -216,14 +216,14 @@ INSERT INTO ExamAttempts (attempt_id,exam_id,student_id,attempt_number,started_a
 (1018,2,13,1,'2025-11-15 14:07:00','2025-11-15 14:32:00',FALSE,14.00,70.00,'submitted', 0,0,0,0,'192.168.1.108','Firefox/121 Windows 11'),
 (1019,2,14,1,'2025-11-15 14:09:00','2025-11-15 14:31:00',FALSE,16.00,80.00,'submitted', 0,0,0,0,'192.168.1.109','Chrome/120 Windows 10'),
 (1020,2,15,1,'2025-11-15 14:11:00','2025-11-15 14:26:00',FALSE,18.00,90.00,'submitted', 2,0,0,0,'192.168.1.110','Chrome/120 macOS'),
--- Exam 3 — live (in_progress)
-(2001,3,6, 1,'2026-03-13 09:15:00',NULL,FALSE,NULL,NULL,'in_progress', 0, 0,0,0,'192.168.1.101','Chrome/121 Windows 11'),
-(2002,3,7, 1,'2026-03-13 09:10:00',NULL,FALSE,NULL,NULL,'in_progress',18, 2,0,1,'192.168.1.102','Firefox/122 Windows 11'),
-(2003,3,8, 1,'2026-03-13 09:05:00',NULL,FALSE,NULL,NULL,'flagged',    82,10,5,3,'192.168.1.103','Chrome/121 Windows 10'),
-(2004,3,9, 1,'2026-03-13 09:08:00',NULL,FALSE,NULL,NULL,'in_progress', 5, 0,0,0,'192.168.1.104','Safari/17 macOS'),
-(2005,3,10,1,'2026-03-13 09:12:00',NULL,FALSE,NULL,NULL,'flagged',    72,14,7,5,'10.0.0.51','Chrome/121 Linux'),
-(2006,3,11,1,'2026-03-13 09:20:00',NULL,FALSE,NULL,NULL,'in_progress', 0, 0,0,0,'192.168.1.106','Chrome/121 Windows 11'),
-(2007,3,12,1,'2026-03-13 09:18:00',NULL,FALSE,NULL,NULL,'in_progress',10, 1,0,0,'192.168.1.107','Edge/121 Windows 11'),
+-- Exam 3 — timed-out (started March 13; auto-swept after 120-min window)
+(2001,3,6, 1,'2026-03-13 09:15:00','2026-03-13 11:15:00',TRUE, 40.00,40.00,'timed_out',  0, 0,0,0,'192.168.1.101','Chrome/121 Windows 11'),
+(2002,3,7, 1,'2026-03-13 09:10:00','2026-03-13 11:10:00',TRUE, 20.00,20.00,'timed_out', 18, 2,0,1,'192.168.1.102','Firefox/122 Windows 11'),
+(2003,3,8, 1,'2026-03-13 09:05:00','2026-03-13 11:05:00',TRUE, 80.00,80.00,'flagged',   82,10,5,3,'192.168.1.103','Chrome/121 Windows 10'),
+(2004,3,9, 1,'2026-03-13 09:08:00','2026-03-13 11:08:00',TRUE, 20.00,20.00,'timed_out',  5, 0,0,0,'192.168.1.104','Safari/17 macOS'),
+(2005,3,10,1,'2026-03-13 09:12:00','2026-03-13 11:12:00',TRUE, 60.00,60.00,'flagged',   72,14,7,5,'10.0.0.51','Chrome/121 Linux'),
+(2006,3,11,1,'2026-03-13 09:20:00','2026-03-13 11:20:00',TRUE, 60.00,60.00,'timed_out',  0, 0,0,0,'192.168.1.106','Chrome/121 Windows 11'),
+(2007,3,12,1,'2026-03-13 09:18:00','2026-03-13 11:18:00',TRUE, 10.00,10.00,'timed_out', 10, 1,0,0,'192.168.1.107','Edge/121 Windows 11'),
 -- Exam 3 — arjun completed attempt (submitted)
 (2010,3,6, 2,'2026-04-02 10:00:00','2026-04-02 11:52:00',FALSE,80.00,80.00,'submitted', 4, 1,0,0,'192.168.1.101','Chrome/123 Windows 11'),
 -- Exam 5 — AI Mid-Term (completed)

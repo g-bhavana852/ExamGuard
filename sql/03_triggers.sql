@@ -36,6 +36,10 @@ BEGIN
     IF vt IN ('MCQ','TRUE_FALSE') THEN
         IF NEW.selected_option=vc THEN SET NEW.is_correct=TRUE; SET NEW.marks_obtained=vm;
         ELSE SET NEW.is_correct=FALSE; SET NEW.marks_obtained=0.00; END IF;
+    ELSEIF vt='SHORT_ANSWER' THEN
+        IF TRIM(LOWER(NEW.selected_option))=TRIM(LOWER(COALESCE(vc,''))) AND vc IS NOT NULL AND vc!='' THEN
+            SET NEW.is_correct=TRUE; SET NEW.marks_obtained=vm;
+        ELSE SET NEW.is_correct=FALSE; SET NEW.marks_obtained=0.00; END IF;
     ELSE SET NEW.is_correct=NULL; SET NEW.marks_obtained=0.00; END IF;
 END //
 
@@ -77,7 +81,7 @@ BEGIN
             NEW.attempt_id,
             CASE WHEN NEW.auto_submitted OR NEW.status='timed_out' THEN 'AUTO_SUBMITTED' ELSE 'EXAM_SUBMITTED' END,
             'INFO',
-            CONCAT('Status→',NEW.status,'. Duration:',TIMESTAMPDIFF(MINUTE,NEW.started_at,NOW()),'min. Score:',COALESCE(NEW.score,'Pending'),'. Suspicion:',NEW.suspicion_score,'/100.'));
+            CONCAT('Status: ',NEW.status,'. Duration:',TIMESTAMPDIFF(MINUTE,NEW.started_at,NOW()),'min. Score:',COALESCE(NEW.score,'Pending'),'. Suspicion:',NEW.suspicion_score,'/100.'));
     END IF;
 END //
 
@@ -92,7 +96,7 @@ BEGIN
         WHERE student_id=NEW.user_id AND status='in_progress' ORDER BY started_at DESC LIMIT 1;
         IF va IS NOT NULL THEN
             INSERT INTO ProctorLogs(attempt_id,event_type,severity,event_details,ip_address) VALUES(
-                va,'IDLE_WARNING','CRITICAL',
+                va,'MULTIPLE_LOGIN_DETECTED','CRITICAL',
                 CONCAT('Multiple login: new session from ',NEW.ip_address,' while attempt #',va,' active from different IP.'),
                 NEW.ip_address);
         END IF;

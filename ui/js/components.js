@@ -219,31 +219,37 @@ function renderRiskSummary(risk) {
 }
 
 // ── Course Cards (Courses page) ───────────────────────────────
-function renderCourseCards(courses) {
+function renderCourseCards(courses, currentUserId) {
   if (!courses.length) return `
     <div class="card" style="grid-column:1/-1">
       <div class="card-body" style="padding:32px;text-align:center;color:var(--text3)">
         No courses yet. Click <strong>+ New Course</strong> to add one.
       </div>
     </div>`;
-  return courses.map(c => `
+  return courses.map(c => {
+    const isOwner = !currentUserId || c.instructor_id === currentUserId;
+    return `
     <div class="course-card">
       <div class="course-card-code">${esc(c.course_code)}</div>
       <div class="course-card-name">${esc(c.course_name)}</div>
       <div class="course-card-desc">${esc(c.description || 'No description provided.')}</div>
       <div class="course-card-meta">
         <span>Instructor: <strong>${esc(c.instructor)}</strong></span>
-        <span>Exams: <strong>${c.exam_count}</strong></span>
-        <span>Students: <strong>${c.student_count}</strong></span>
+        ${c.exam_count != null ? `<span>Exams: <strong>${c.exam_count}</strong></span>` : ''}
+        ${c.student_count != null ? `<span>Students: <strong>${c.student_count}</strong></span>` : ''}
       </div>
       <div style="display:flex;gap:8px">
         <button type="button" class="btn btn-outline" style="font-size:11px;padding:5px 10px;flex:1"
           onclick="showPage('exams')">View Exams</button>
+        ${isOwner ? `
+        <button type="button" class="btn btn-outline" style="font-size:11px;padding:5px 10px"
+          onclick="showEditCourseModal(${c.course_id}, '${esc(c.course_name)}', '${esc(c.description || '')}')">Edit</button>
         <button type="button" class="btn btn-danger" style="font-size:11px;padding:5px 10px"
           data-cid="${c.course_id}" data-cname="${esc(c.course_name)}"
-          onclick="deleteCourse(this.dataset.cid, this.dataset.cname)">Deactivate</button>
+          onclick="deleteCourse(this.dataset.cid, this.dataset.cname)">Deactivate</button>` : ''}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 // ── Exam Questions (Exam Taking overlay) ──────────────────────
@@ -299,6 +305,9 @@ function renderExamCards(exams) {
       actionHtml = `<button type="button" class="btn ${e.action.cls}" style="flex:1;font-size:12px"
         data-eid="${e.action.examId}" data-etitle="${esc(e.title)}"
         onclick="startExam(this.dataset.eid, this.dataset.etitle)">${esc(e.action.label)}</button>`;
+    } else if (e.action.viewResult) {
+      actionHtml = `<button type="button" class="btn ${e.action.cls}" style="flex:1;font-size:12px"
+        onclick="showStudentOwnResult(${e.action.attemptId})">${esc(e.action.label)}</button>`;
     } else if (e.action.page) {
       actionHtml = `<button type="button" class="btn ${e.action.cls}" style="flex:1;font-size:12px"
         onclick="showPage('${e.action.page}')">${esc(e.action.label)}</button>`;
@@ -455,7 +464,6 @@ function renderMyExamCards(exams, isTeacher) {
 
     // ── Draft notice — no questions or marks mismatch ─────────
     const noQuestions = e.questions === 0;
-    const marksOk = !e.marksMismatch || e.questions === 0;
     let draftNotice = '';
     if (isTeacher && e.isDraft) {
       if (noQuestions) {
@@ -525,35 +533,38 @@ function renderMyExamCards(exams, isTeacher) {
       </div>`;
 
     // ── Action buttons ────────────────────────────────────────
-    // Open button: shown for Draft exams (not yet published) AND upcoming (scheduled but future)
-    const canOpen = e.isDraft || e.isUpcoming;
-    const openBtn = isTeacher && canOpen
-      ? `<button class="btn btn-primary" style="font-size:12px;padding:6px 10px"
-          data-exam-id="${e.id}" data-exam-title="${esc(e.title)}" data-exam-dur="${e.duration}"
-          onclick="openExam(this.dataset.examId,this.dataset.examTitle,this.dataset.examDur)">Open &amp; Get Code</button>`
-      : '';
-    const closeBtn = isTeacher && e.isActive
-      ? `<button class="btn btn-danger" style="font-size:12px;padding:6px 10px"
-          data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
-          onclick="closeExam(this.dataset.examId,this.dataset.examTitle)">End Exam</button>`
-      : '';
-    const sessionBtn = isTeacher && e.isActive
-      ? `<button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
-          onclick="showPage('classroom')">Live Session</button>`
-      : '';
-
     const actionButtons = isTeacher
-      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto">
-          ${openBtn}${closeBtn}${sessionBtn}
-          <button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
-            data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
-            onclick="showAddQuestionModal(this.dataset.examId, this.dataset.examTitle)">+ Question</button>
-          <button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
-            onclick="showPage('results')">Results</button>
-          <button class="btn btn-danger" style="font-size:12px;padding:6px 10px;margin-left:auto"
-            data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
-            onclick="deleteExam(this.dataset.examId, this.dataset.examTitle)">Delete</button>
-        </div>`
+      ? e.isEnded
+        ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto">
+            <button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
+              data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
+              onclick="showExamQuestions(this.dataset.examId, this.dataset.examTitle)">Questions</button>
+            <button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
+              data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
+              onclick="showExamResults(this.dataset.examId, this.dataset.examTitle)">Results</button>
+          </div>`
+        : `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto">
+            ${e.isDraft ? `<button class="btn btn-primary" style="font-size:12px;padding:6px 10px"
+                data-exam-id="${e.id}" data-exam-title="${esc(e.title)}" data-exam-dur="${e.duration}"
+                onclick="openExam(this.dataset.examId,this.dataset.examTitle,this.dataset.examDur)">Open &amp; Get Code</button>` : ''}
+            ${e.isActive ? `<button class="btn btn-danger" style="font-size:12px;padding:6px 10px"
+                data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
+                onclick="closeExam(this.dataset.examId,this.dataset.examTitle)">End Exam</button>` : ''}
+            ${!e.isEnded ? `<button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
+                data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
+                onclick="showAddQuestionModal(this.dataset.examId, this.dataset.examTitle)">+ Question</button>` : ''}
+            <button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
+              data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
+              onclick="showExamQuestions(this.dataset.examId, this.dataset.examTitle)">Questions</button>
+            <button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
+              data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
+              onclick="showExamResults(this.dataset.examId, this.dataset.examTitle)">Results</button>
+            <button class="btn btn-outline" style="font-size:12px;padding:6px 10px"
+              onclick="showEditExamModal(${e.id}, '${esc(e.title)}', '${esc(e.descriptionRaw||'')}', ${e.passingMarksRaw||0}, ${e.durationRaw||0})">Edit</button>
+            <button class="btn btn-danger" style="font-size:12px;padding:6px 10px;margin-left:auto"
+              data-exam-id="${e.id}" data-exam-title="${esc(e.title)}"
+              onclick="deleteExam(this.dataset.examId, this.dataset.examTitle)">Delete</button>
+          </div>`
       : '';
 
     return `
@@ -654,6 +665,8 @@ function renderBrilliantQuestionBank(groups, examMeta) {
               <span>Avg time: <strong>${esc(q.avgTime)}</strong></span>
               <span>Answered: <strong>${q.answered}</strong></span>
             </div>
+            <button class="btn btn-outline" style="font-size:11px;padding:3px 8px;margin-right:4px"
+              onclick="showEditQuestionModal(${q.id})">Edit</button>
             <button class="btn btn-danger" style="font-size:11px;padding:3px 8px"
               onclick="deleteQuestion(${q.id})">Delete</button>
           </div>

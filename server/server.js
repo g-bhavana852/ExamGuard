@@ -109,7 +109,9 @@ const route = (method, path, fn) => app[method](path, async (req, res) => {
 });
 
 // ── GET /api/dashboard ────────────────────────────────────────
-route('get', '/api/dashboard', async (_req, res) => {
+route('get', '/api/dashboard', async (req, res) => {
+    const { userId } = await getUserWithRole(req);
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
     // ─ Summary counts ─
     const [[counts]] = await pool.query(`
       SELECT
@@ -375,9 +377,13 @@ route('get', '/api/monitor/exam/:id', async (req, res) => {
 
 // ── GET /api/flagged ──────────────────────────────────────────
 route('get', '/api/flagged', async (req, res) => {
-    const { roles } = await getUserWithRole(req);
+    const { userId, roles } = await getUserWithRole(req);
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
     if (!hasAnyRole(roles, 'admin', 'teacher'))
       return res.status(403).json({ error: 'Teacher or admin access required' });
+    const isTeacher     = hasAnyRole(roles, 'teacher') && !hasAnyRole(roles, 'admin');
+    const instrFilter   = isTeacher ? 'AND ex.created_by = ?' : '';
+    const instrParam    = isTeacher ? [userId] : [];
     // Teacher can choose sort order via ?sort= query param
     const SORT_MAP = {
       suspicion:  'ea.suspicion_score DESC',
@@ -412,7 +418,9 @@ route('get', '/api/flagged', async (req, res) => {
       JOIN Users u  ON ea.student_id = u.user_id
       JOIN Exams ex ON ea.exam_id    = ex.exam_id
       WHERE (ea.status IN ('flagged','timed_out') OR ea.suspicion_score >= 5)
-      ORDER BY ${orderClause}`
+        ${instrFilter}
+      ORDER BY ${orderClause}`,
+      [...instrParam]
     );
 
     const attempts = rows.map(r => {
@@ -434,7 +442,7 @@ route('get', '/api/flagged', async (req, res) => {
         name: r.full_name, email: r.email,
         examTitle: r.exam_title,
         attemptId: r.attempt_id,
-        isLive: r.status === 'in_progress' || r.status === 'flagged',
+        isLive: r.status === 'in_progress',
         statusBadge, statusText,
         suspicion: sc, suspColor: suspColor(sc),
         tabs:        r.tab_switches,        tabColor,
@@ -459,7 +467,9 @@ route('get', '/api/flagged', async (req, res) => {
       JOIN Exams ex ON ea.exam_id = ex.exam_id
       JOIN Users u ON ea.student_id = u.user_id
       LEFT JOIN Users ru ON sf.resolved_by = ru.user_id
-      ORDER BY sf.is_resolved ASC, sf.detected_at DESC`
+      WHERE 1=1 ${instrFilter}
+      ORDER BY sf.is_resolved ASC, sf.detected_at DESC`,
+      [...instrParam]
     );
 
     const badgeMap = {
@@ -486,9 +496,13 @@ route('get', '/api/flagged', async (req, res) => {
 
 // ── GET /api/logs ─────────────────────────────────────────────
 route('get', '/api/logs', async (req, res) => {
-    const { roles } = await getUserWithRole(req);
+    const { userId, roles } = await getUserWithRole(req);
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
     if (!hasAnyRole(roles, 'admin', 'teacher'))
       return res.status(403).json({ error: 'Teacher or admin access required' });
+    const logsIsTeacher  = hasAnyRole(roles, 'teacher') && !hasAnyRole(roles, 'admin');
+    const logsFilter     = logsIsTeacher ? 'AND ex.created_by = ?' : '';
+    const logsParam      = logsIsTeacher ? [userId] : [];
     // All attempts list for the selector (sorted by suspicion desc)
     const allAttempts = await q(`
       SELECT ea.attempt_id, u.full_name, ex.title AS exam_title,
@@ -496,10 +510,12 @@ route('get', '/api/logs', async (req, res) => {
       FROM ExamAttempts ea
       JOIN Users u  ON ea.student_id = u.user_id
       JOIN Exams ex ON ea.exam_id    = ex.exam_id
-      ORDER BY ea.suspicion_score DESC, ea.attempt_id`
+      WHERE 1=1 ${logsFilter}
+      ORDER BY ea.suspicion_score DESC, ea.attempt_id`,
+      [...logsParam]
     );
 
-    // Pick the attempt to show: ?attempt_id=N or fallback to highest suspicion
+    // Pick the attempt to show: ?attempt_id=N or fallback to highest suspicion (teacher-scoped)
     const requestedId = parseInt(req.query.attempt_id) || null;
     const [attemptRows] = await pool.query(`
       SELECT ea.attempt_id, u.full_name, ea.suspicion_score,
@@ -509,8 +525,10 @@ route('get', '/api/logs', async (req, res) => {
       FROM ExamAttempts ea
       JOIN Users u  ON ea.student_id = u.user_id
       JOIN Exams ex ON ea.exam_id    = ex.exam_id
-      ${requestedId ? 'WHERE ea.attempt_id = ?' : 'ORDER BY ea.suspicion_score DESC LIMIT 1'}`,
-      requestedId ? [requestedId] : []
+      ${requestedId
+        ? 'WHERE ea.attempt_id = ?'
+        : `WHERE 1=1 ${logsFilter} ORDER BY ea.suspicion_score DESC LIMIT 1`}`,
+      requestedId ? [requestedId] : [...logsParam]
     );
     const attempt = attemptRows[0];
 
@@ -636,7 +654,7 @@ route('get', '/api/student-view', async (req, res) => {
       let statusBadge, statusText, action;
       if (isSubmitted) {
         statusBadge = 'badge-green'; statusText = 'Submitted';
-        action = { label: 'View Results', cls: 'btn-outline', page: 'results' };
+        action = { label: 'View Results', cls: 'btn-outline', viewResult: true, attemptId: e.attempt_id };
       } else if (isActive) {
         statusBadge = 'badge-green'; statusText = 'Active — Open Now';
         action = { label: 'Start Exam', cls: 'btn-primary', startExam: true, examId: e.exam_id };
@@ -915,6 +933,10 @@ route('get', '/api/results', async (req, res) => {
       whereExtra = 'AND ea.student_id = ?';
       whereParams.push(userId);
     }
+    if (req.query.exam_id) {
+      whereExtra += ' AND ex.exam_id = ?';
+      whereParams.push(parseInt(req.query.exam_id));
+    }
 
     const rows = await q(`
       SELECT ea.attempt_id, u.full_name, ex.exam_id, ex.title AS exam_title,
@@ -1039,14 +1061,17 @@ route('get', '/api/results/:attempt_id', async (req, res) => {
 
 // ── GET /api/exams ────────────────────────────────────────────
 route('get', '/api/exams', async (req, res) => {
-    const { userId, role } = await getUserWithRole(req);
-    const ownerSql    = (role === 'teacher') ? 'WHERE e.created_by = ?' : '';
-    const ownerParams = (role === 'teacher') ? [userId] : [];
+    const { userId, roles } = await getUserWithRole(req);
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+    const isTeacher   = hasAnyRole(roles, 'teacher') && !hasAnyRole(roles, 'admin');
+    const ownerSql    = isTeacher ? 'WHERE e.created_by = ?' : '';
+    const ownerParams = isTeacher ? [userId] : [];
 
     const rows = await q(`
       SELECT
         e.exam_id,
         e.title,
+        e.description,
         e.join_code,
         e.is_published,
         c.course_code,
@@ -1074,7 +1099,7 @@ route('get', '/api/exams', async (req, res) => {
       JOIN Users   u ON e.created_by = u.user_id
       LEFT JOIN ExamAttempts ea ON e.exam_id = ea.exam_id
       ${ownerSql}
-      GROUP BY e.exam_id, e.title, e.join_code, e.is_published, c.course_code, c.course_name,
+      GROUP BY e.exam_id, e.title, e.description, e.join_code, e.is_published, c.course_code, c.course_name,
                u.full_name, e.total_marks, e.passing_marks, e.duration_minutes,
                e.window_start, e.window_end, e.max_attempts,
                e.shuffle_questions, e.show_results_immediately
@@ -1090,8 +1115,9 @@ route('get', '/api/exams', async (req, res) => {
       const draft      = !published;
       const upcoming   = published && now < start;
       const active     = published && now >= start && now <= end;
-      const statusText  = draft ? 'Draft' : upcoming ? 'Upcoming' : active ? 'Active' : 'Completed';
-      const statusBadge = draft ? 'badge-gray' : upcoming ? 'badge-purple' : active ? 'badge-green' : 'badge-gray';
+      const ended      = published && !upcoming && !active;
+      const statusText  = draft ? 'Draft' : active ? 'Live' : ended ? 'Ended' : 'Upcoming';
+      const statusBadge = draft ? 'badge-gray' : active ? 'badge-green' : ended ? 'badge-red' : 'badge-purple';
       const passRate = r.completed > 0
         ? Math.round((r.passed / r.completed) * 100) + '%'
         : '—';
@@ -1102,7 +1128,7 @@ route('get', '/api/exams', async (req, res) => {
         course:            `${r.course_code} · ${r.course_name}`,
         courseCode:        r.course_code,
         instructor:        r.instructor,
-        totalMarks:        r.total_marks,
+        totalMarks:        parseFloat(r.total_marks),
         passingMarks:      r.passing_marks,
         marks:             `${r.passing_marks}/${r.total_marks}`,
         duration:          r.duration_minutes,
@@ -1116,6 +1142,7 @@ route('get', '/api/exams', async (req, res) => {
         isDraft:           draft,
         isActive:          active,
         isUpcoming:        upcoming,
+        isEnded:           ended,
         liveCount:         r.live_count || 0,
         attempts:          r.total_attempts,
         completed:         r.completed || 0,
@@ -1124,6 +1151,9 @@ route('get', '/api/exams', async (req, res) => {
         passRate,
         shuffle:           r.shuffle_questions  ? 'Yes' : '—',
         showResults:       r.show_results_immediately ? 'Yes' : '—',
+        passingMarksRaw:   r.passing_marks,
+        durationRaw:       r.duration_minutes,
+        descriptionRaw:    r.description || '',
       };
     });
 
@@ -1210,6 +1240,100 @@ route('get', '/api/questions', async (req, res) => {
     }
 
     res.json({ groups: grouped });
+});
+
+// ── PUT /api/questions/:id ────────────────────────────────────
+// Teacher/admin edits a question even after the exam has started.
+// If correct_answer or marks changed, re-grades existing StudentAnswers
+// and recalculates score/percentage on all submitted/flagged attempts.
+route('put', '/api/questions/:id', async (req, res) => {
+  const { userId, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin'))
+    return res.status(403).json({ error: 'Only teachers can edit questions' });
+
+  const qId = parseInt(req.params.id);
+  const {
+    question_text, question_type, marks, difficulty_level, order_index,
+    correct_answer,
+    option_a, option_b, option_c, option_d, option_e,
+    option_f, option_g, option_h, option_i, option_j,
+  } = req.body;
+
+  // Fetch current question to detect changes
+  const [[old]] = await pool.execute(
+    `SELECT q.*, e.created_by FROM Questions q JOIN Exams e ON q.exam_id=e.exam_id WHERE q.question_id=?`,
+    [qId]
+  );
+  if (!old) return res.status(404).json({ error: 'Question not found' });
+  if (!hasAnyRole(roles, 'admin') && old.created_by !== userId)
+    return res.status(403).json({ error: 'You do not own this exam' });
+
+  await pool.execute(
+    `UPDATE Questions SET
+       question_text   = COALESCE(?, question_text),
+       question_type   = COALESCE(?, question_type),
+       marks           = COALESCE(?, marks),
+       difficulty_level= COALESCE(?, difficulty_level),
+       order_index     = COALESCE(?, order_index),
+       correct_answer  = ?,
+       option_a=COALESCE(?,option_a), option_b=COALESCE(?,option_b),
+       option_c=COALESCE(?,option_c), option_d=COALESCE(?,option_d),
+       option_e=COALESCE(?,option_e), option_f=COALESCE(?,option_f),
+       option_g=COALESCE(?,option_g), option_h=COALESCE(?,option_h),
+       option_i=COALESCE(?,option_i), option_j=COALESCE(?,option_j)
+     WHERE question_id=?`,
+    [
+      question_text ?? null, question_type ?? null, marks ?? null,
+      difficulty_level ?? null, order_index ?? null,
+      correct_answer !== undefined ? correct_answer : old.correct_answer,
+      option_a ?? null, option_b ?? null, option_c ?? null, option_d ?? null,
+      option_e ?? null, option_f ?? null, option_g ?? null, option_h ?? null,
+      option_i ?? null, option_j ?? null,
+      qId,
+    ]
+  );
+
+  // Re-grade if correct_answer or marks changed
+  const newCorrect = correct_answer !== undefined ? correct_answer : old.correct_answer;
+  const newMarks   = marks !== undefined ? parseFloat(marks) : parseFloat(old.marks);
+  const answerChanged = newCorrect !== old.correct_answer;
+  const marksChanged  = Math.abs(newMarks - parseFloat(old.marks)) > 0.001;
+
+  if ((answerChanged || marksChanged) && old.question_type !== 'SHORT_ANSWER') {
+    // Re-grade StudentAnswers for this question
+    await pool.execute(
+      `UPDATE StudentAnswers
+       SET is_correct     = (selected_option = ?),
+           marks_obtained = IF(selected_option = ?, ?, 0)
+       WHERE question_id = ?`,
+      [newCorrect, newCorrect, newMarks, qId]
+    );
+
+    // Recalculate score + percentage for every affected attempt
+    const [affected] = await pool.execute(
+      `SELECT DISTINCT sa.attempt_id FROM StudentAnswers sa WHERE sa.question_id=?`, [qId]
+    );
+    for (const row of affected) {
+      const [[sums]] = await pool.execute(
+        `SELECT COALESCE(SUM(sa.marks_obtained),0) AS score, e.total_marks
+         FROM StudentAnswers sa
+         JOIN ExamAttempts ea ON sa.attempt_id=ea.attempt_id
+         JOIN Exams e ON ea.exam_id=e.exam_id
+         WHERE sa.attempt_id=?`, [row.attempt_id]
+      );
+      const pct = sums.total_marks > 0
+        ? Math.round((sums.score / sums.total_marks) * 10000) / 100
+        : 0;
+      await pool.execute(
+        `UPDATE ExamAttempts SET score=?, percentage=?
+         WHERE attempt_id=? AND status IN ('submitted','graded','flagged','timed_out')`,
+        [sums.score, pct, row.attempt_id]
+      );
+    }
+  }
+
+  res.json({ success: true, reGraded: answerChanged || marksChanged });
 });
 
 // ── GET /api/export ───────────────────────────────────────────
@@ -1341,12 +1465,12 @@ route('get', '/api/courses', async (req, res) => {
   const ownerSql    = (role === 'teacher') ? 'AND c.instructor_id = ?' : '';
   const ownerParams = (role === 'teacher') ? [userId] : [];
   const rows = await q(
-    `SELECT c.course_id, c.course_code, c.course_name, u.full_name AS instructor
+    `SELECT c.course_id, c.course_code, c.course_name, c.description, c.instructor_id, u.full_name AS instructor
      FROM Courses c JOIN Users u ON c.instructor_id = u.user_id
      WHERE c.is_active = TRUE ${ownerSql} ORDER BY c.course_name`,
     ownerParams
   );
-  res.json({ courses: rows });
+  res.json({ courses: rows, userId });
 });
 
 // ── POST /api/exams ───────────────────────────────────────────
@@ -1423,10 +1547,7 @@ route('delete', '/api/exams/:id', async (req, res) => {
 });
 
 // ── PATCH /api/exams/:id/open ─────────────────────────────────
-// Opens (or schedules) an exam.
-// Body: { duration_hours, scheduled_at? }
-//   scheduled_at — ISO datetime string; if future, must be ≥ NOW + 10 min.
-//   If omitted/past, defaults to NOW (open immediately).
+// Opens an exam immediately. Body: { duration_hours }
 route('patch', '/api/exams/:id/open', async (req, res) => {
   const { userId, role, roles } = await getUserWithRole(req);
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
@@ -1463,19 +1584,6 @@ route('patch', '/api/exams/:id/open', async (req, res) => {
       error: `Marks mismatch: questions sum to ${examRow.questions_total} but exam declares ${examRow.total_marks}. Adjust question marks or the exam total before opening.`
     });
 
-  // ── Scheduling: optional scheduled_at (must be ≥ NOW + 10 min) ─
-  let windowStart = 'NOW()';
-  let windowStartParam = null;
-  if (req.body.scheduled_at) {
-    const sched = new Date(req.body.scheduled_at);
-    const minStart = new Date(Date.now() + 10 * 60 * 1000);
-    if (isNaN(sched.getTime()))
-      return res.status(400).json({ error: 'Invalid scheduled_at date.' });
-    if (sched < minStart)
-      return res.status(400).json({ error: 'Scheduled start must be at least 10 minutes from now.' });
-    windowStartParam = sched;
-  }
-
   // Generate join_code if exam doesn't have one yet
   const [[codeRow]] = await pool.execute(
     `SELECT join_code FROM Exams WHERE exam_id = ?`, [examId]
@@ -1491,28 +1599,16 @@ route('patch', '/api/exams/:id/open', async (req, res) => {
     await pool.execute(`UPDATE Exams SET join_code=? WHERE exam_id=?`, [join_code, examId]);
   }
 
-  if (windowStartParam) {
-    await pool.execute(
-      `UPDATE Exams
-       SET is_published = TRUE,
-           window_start = ?,
-           window_end   = DATE_ADD(?, INTERVAL ? HOUR)
-       WHERE exam_id = ?`,
-      [windowStartParam, windowStartParam, durationHrs, examId]
-    );
-  } else {
-    await pool.execute(
-      `UPDATE Exams
-       SET is_published = TRUE,
-           window_start = NOW(),
-           window_end   = DATE_ADD(NOW(), INTERVAL ? HOUR)
-       WHERE exam_id = ?`,
-      [durationHrs, examId]
-    );
-  }
+  await pool.execute(
+    `UPDATE Exams
+     SET is_published = TRUE,
+         window_start = NOW(),
+         window_end   = DATE_ADD(NOW(), INTERVAL ? HOUR)
+     WHERE exam_id = ?`,
+    [durationHrs, examId]
+  );
 
-  const scheduled = !!windowStartParam;
-  res.json({ success: true, join_code, scheduled, window_start: windowStartParam?.toISOString() || null });
+  res.json({ success: true, join_code });
 });
 
 // ── PATCH /api/exams/:id/close ────────────────────────────────
@@ -1531,7 +1627,7 @@ route('patch', '/api/exams/:id/close', async (req, res) => {
   }
 
   await pool.execute(
-    `UPDATE Exams SET window_end = DATE_ADD(window_start, INTERVAL 1 SECOND), is_published = 0 WHERE exam_id = ?`,
+    `UPDATE Exams SET window_end = NOW() WHERE exam_id = ?`,
     [examId]
   );
   res.json({ success: true });
@@ -1558,6 +1654,18 @@ route('post', '/api/questions', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields: exam_id, question_text' });
   if (isNaN(m) || m <= 0)
     return res.status(400).json({ error: 'marks must be > 0' });
+
+  // Block adding questions to finished exams; update total_marks for live exams
+  const [[examRow]] = await pool.execute(
+    `SELECT window_start, window_end, total_marks FROM Exams WHERE exam_id = ?`, [exam_id]
+  );
+  if (!examRow) return res.status(404).json({ error: 'Exam not found' });
+  const now = new Date();
+  const isFinished = examRow.window_end && new Date(examRow.window_end) < now;
+  if (isFinished)
+    return res.status(400).json({ error: 'Cannot add questions to a finished exam.' });
+  const isLive = examRow.window_start && new Date(examRow.window_start) <= now &&
+                 examRow.window_end && new Date(examRow.window_end) >= now;
 
   if (qtype === 'MCQ') {
     const opts = { A: option_a, B: option_b, C: option_c, D: option_d,
@@ -1592,7 +1700,14 @@ route('post', '/api/questions', async (req, res) => {
       correct_answer || null, difficulty_level || 'medium', order_index || 0,
     ]
   );
-  res.json({ success: true, question_id: result.insertId });
+  // If live, sync total_marks to actual sum of question marks
+  if (isLive) {
+    await pool.execute(
+      `UPDATE Exams SET total_marks = (SELECT COALESCE(SUM(marks),0) FROM Questions WHERE exam_id = ?) WHERE exam_id = ?`,
+      [exam_id, exam_id]
+    );
+  }
+  res.json({ success: true, question_id: result.insertId, liveUpdate: isLive });
 });
 
 // ── DELETE /api/questions/:id ─────────────────────────────────
@@ -1784,9 +1899,57 @@ route('post', '/api/courses', async (req, res) => {
   res.json({ success: true, course_id: result.insertId });
 });
 
+// ── PATCH /api/courses/:id ────────────────────────────────────
+route('patch', '/api/courses/:id', async (req, res) => {
+  const { userId, role, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin')) return res.status(403).json({ error: 'Forbidden' });
+  const { course_name, description } = req.body;
+  if (!course_name || !course_name.trim())
+    return res.status(400).json({ error: 'course_name is required' });
+  const [[c]] = await pool.execute(`SELECT instructor_id FROM Courses WHERE course_id = ?`, [req.params.id]);
+  if (!c) return res.status(404).json({ error: 'Course not found' });
+  if (role === 'teacher' && c.instructor_id !== userId)
+    return res.status(403).json({ error: 'You can only edit your own courses' });
+  await pool.execute(
+    `UPDATE Courses SET course_name = ?, description = ? WHERE course_id = ?`,
+    [course_name.trim(), description || null, req.params.id]
+  );
+  res.json({ success: true });
+});
+
 // ── DELETE /api/courses/:id (soft-delete) ─────────────────────
 route('delete', '/api/courses/:id', async (req, res) => {
+  const { userId, role, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin')) return res.status(403).json({ error: 'Forbidden' });
+  const [[c]] = await pool.execute(`SELECT instructor_id FROM Courses WHERE course_id = ?`, [req.params.id]);
+  if (c && role === 'teacher' && c.instructor_id !== userId)
+    return res.status(403).json({ error: 'You can only deactivate your own courses' });
   await pool.execute(`UPDATE Courses SET is_active = FALSE WHERE course_id = ?`, [req.params.id]);
+  res.json({ success: true });
+});
+
+// ── PATCH /api/exams/:id ──────────────────────────────────────
+route('patch', '/api/exams/:id', async (req, res) => {
+  const { userId, role, roles } = await getUserWithRole(req);
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (!hasAnyRole(roles, 'teacher', 'admin')) return res.status(403).json({ error: 'Forbidden' });
+  const [[ex]] = await pool.execute(`SELECT created_by FROM Exams WHERE exam_id = ?`, [req.params.id]);
+  if (!ex) return res.status(404).json({ error: 'Exam not found' });
+  if (role === 'teacher' && ex.created_by !== userId)
+    return res.status(403).json({ error: 'You can only edit your own exams' });
+  const { title, description, passing_marks, duration_minutes, total_marks } = req.body;
+  const fields = [];
+  const vals = [];
+  if (title)            { fields.push('title = ?');            vals.push(title.trim()); }
+  if (description !== undefined) { fields.push('description = ?'); vals.push(description || null); }
+  if (passing_marks)    { fields.push('passing_marks = ?');    vals.push(parseFloat(passing_marks)); }
+  if (duration_minutes) { fields.push('duration_minutes = ?'); vals.push(parseInt(duration_minutes)); }
+  if (total_marks)      { fields.push('total_marks = ?');      vals.push(parseFloat(total_marks)); }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+  vals.push(req.params.id);
+  await pool.execute(`UPDATE Exams SET ${fields.join(', ')} WHERE exam_id = ?`, vals);
   res.json({ success: true });
 });
 
@@ -1802,28 +1965,36 @@ function makeJoinCode() {
   return code;
 }
 
-// GET /api/classroom/active — returns the single live classroom (if any)
+// GET /api/classroom/active — returns live/scheduled exams owned by this teacher
 route('get', '/api/classroom/active', async (req, res) => {
-  const { userId, role } = await getUserWithRole(req);
+  const { userId, roles } = await getUserWithRole(req);
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+  const isAdmin   = hasAnyRole(roles, 'admin');
+  const ownerSql  = isAdmin ? '' : 'AND e.created_by = ?';
+  const ownerParam = isAdmin ? [] : [userId];
 
   const rows = await q(
     `SELECT e.exam_id, e.title, e.join_code, e.duration_minutes,
             e.total_marks, e.passing_marks, e.window_start, e.window_end,
             c.course_name,
+            CASE WHEN NOW() BETWEEN e.window_start AND e.window_end THEN 'live'
+                 WHEN NOW() < e.window_start THEN 'scheduled'
+                 ELSE 'ended' END                                                AS classroom_status,
             (SELECT COUNT(*) FROM ExamAttempts ea WHERE ea.exam_id=e.exam_id AND ea.status='in_progress') AS live_count,
             (SELECT COUNT(*) FROM ExamAttempts ea WHERE ea.exam_id=e.exam_id) AS total_joined
      FROM   Exams e JOIN Courses c ON e.course_id=c.course_id
-     WHERE  e.is_published=TRUE AND e.window_start<=NOW() AND e.window_end>=NOW()
-     ORDER  BY e.exam_id DESC`
+     WHERE  e.is_published=TRUE AND e.window_end>=NOW() AND e.join_code IS NOT NULL ${ownerSql}
+     ORDER  BY e.window_start ASC`,
+    ownerParam
   );
-  // Return both: `classrooms` array (all active) and legacy `classroom` (first) for backward compat
-  res.json({ classroom: rows[0] || null, classrooms: rows });
+  // Return both: `classrooms` array (live + scheduled) and legacy `classroom` (first live) for backward compat
+  const live = rows.find(r => r.classroom_status === 'live') || null;
+  res.json({ classroom: live, classrooms: rows });
 });
 
 // POST /api/classroom/create — teacher/admin creates a new live classroom
 route('post', '/api/classroom/create', async (req, res) => {
-  const { userId, role, roles } = await getUserWithRole(req);
+  const { userId, roles } = await getUserWithRole(req);
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
   if (!hasAnyRole(roles, 'teacher', 'admin'))
     return res.status(403).json({ error: 'Only teachers can create classrooms' });
@@ -1855,15 +2026,13 @@ route('post', '/api/classroom/create', async (req, res) => {
     if (!exists) break;
   } while (++tries < 10);
 
-  const windowEnd = new Date(Date.now() + 8 * 60 * 60 * 1000); // 8-hour window by default
-
   const [result] = await pool.execute(
     `INSERT INTO Exams
        (course_id, title, total_marks, passing_marks, duration_minutes,
         window_start, window_end, created_by, is_published, max_attempts,
         shuffle_questions, show_results_immediately, join_code)
-     VALUES (?,?,?,?,?,NOW(),?,?,TRUE,99,FALSE,FALSE,?)`,
-    [course_id, title, total_marks, passing_marks, duration_minutes, windowEnd, userId, join_code]
+     VALUES (?,?,?,?,?,NOW(),DATE_ADD(NOW(), INTERVAL 8 HOUR),?,TRUE,99,FALSE,FALSE,?)`,
+    [course_id, title, total_marks, passing_marks, duration_minutes, userId, join_code]
   );
 
   res.json({ success: true, exam_id: result.insertId, join_code });
@@ -1915,7 +2084,11 @@ route('post', '/api/classroom/join', async (req, res) => {
          FROM   Questions WHERE exam_id=? ORDER BY order_index ASC, question_id ASC`,
         [exam.exam_id]
       );
-      return res.json({ attempt_id: existing.attempt_id, exam, questions, resumed: true });
+      const [[resumedAttempt]] = await conn.execute(
+        `SELECT started_at FROM ExamAttempts WHERE attempt_id=?`, [existing.attempt_id]
+      );
+      return res.json({ attempt_id: existing.attempt_id, exam, questions, resumed: true,
+                        started_at: resumedAttempt?.started_at || null });
     }
 
     // T1 fires: validates window + attempt limit
@@ -1942,27 +2115,17 @@ route('post', '/api/classroom/join', async (req, res) => {
       [exam.exam_id]
     );
 
-    res.json({ attempt_id, exam, questions, resumed: false });
+    const [[newAttempt]] = await conn.execute(
+      `SELECT started_at FROM ExamAttempts WHERE attempt_id=?`, [attempt_id]
+    );
+    res.json({ attempt_id, exam, questions, resumed: false,
+               started_at: newAttempt?.started_at || null });
   } catch (err) {
     await conn.rollback();
     throw err;
   } finally {
     conn.release();
   }
-});
-
-// POST /api/classroom/end — teacher ends the active classroom
-route('post', '/api/classroom/end', async (req, res) => {
-  const { userId, role, roles } = await getUserWithRole(req);
-  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
-  if (!hasAnyRole(roles, 'teacher', 'admin'))
-    return res.status(403).json({ error: 'Only teachers can end classrooms' });
-
-  const { exam_id } = req.body;
-  await pool.execute(
-    `UPDATE Exams SET window_end=DATE_ADD(window_start, INTERVAL 1 SECOND) WHERE exam_id=? AND is_published=TRUE`, [exam_id]
-  );
-  res.json({ success: true });
 });
 
 // ── POST /api/exams/:id/start ─────────────────────────────────
@@ -2019,7 +2182,11 @@ route('post', '/api/exams/:id/start', async (req, res) => {
       [exam_id]
     );
 
-    res.json({ attempt_id, exam, questions });
+    const [[startedAtRow]] = await conn.execute(
+      `SELECT started_at FROM ExamAttempts WHERE attempt_id = ?`, [attempt_id]
+    );
+
+    res.json({ attempt_id, exam, questions, started_at: startedAtRow?.started_at || null });
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -2195,8 +2362,11 @@ route('post', '/api/proctor/kick/:attempt_id', async (req, res) => {
 });
 
 // ── GET /api/proctor-actions ──────────────────────────────────
-// Returns all proctor-issued warns and kicks — visible to proctors and teachers.
-route('get', '/api/proctor-actions', async (_req, res) => {
+route('get', '/api/proctor-actions', async (req, res) => {
+  const { userId, roles } = await getUserWithRole(req);
+  const isTeacher = hasAnyRole(roles, 'teacher') && !hasAnyRole(roles, 'admin');
+  const filter    = isTeacher ? 'AND ex.created_by = ?' : '';
+  const params    = isTeacher ? [userId] : [];
   const rows = await q(`
     SELECT pl.attempt_id, pl.event_type, pl.severity, pl.event_details,
            pl.logged_at, u.full_name AS student_name, ex.title AS exam_title
@@ -2204,8 +2374,9 @@ route('get', '/api/proctor-actions', async (_req, res) => {
     JOIN ExamAttempts ea ON pl.attempt_id = ea.attempt_id
     JOIN Users u         ON ea.student_id = u.user_id
     JOIN Exams ex        ON ea.exam_id    = ex.exam_id
-    WHERE pl.event_type IN ('IDLE_WARNING', 'PROCTOR_KICK')
-    ORDER BY pl.logged_at DESC`
+    WHERE pl.event_type IN ('IDLE_WARNING', 'PROCTOR_KICK') ${filter}
+    ORDER BY pl.logged_at DESC`,
+    params
   );
   const actions = rows.map(r => ({
     type:     r.event_type === 'PROCTOR_KICK' ? 'kick' : 'warn',

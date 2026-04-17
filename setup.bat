@@ -62,10 +62,10 @@ if errorlevel 1 ( echo FAILED & pause & exit /b 1 )
 echo       OK
 
 :: ── Step 5 : Sample data ────────────────────────────────────
-:: 06_sample_data.sql drops triggers first (to bypass window/
+:: 05_sample_data.sql drops triggers first (to bypass window/
 :: time validation on historical data), then re-adds them.
 echo [5/6] Loading sample data...
-%MYSQL% -u %DB_USER% -p%DB_PASS% < sql\06_sample_data.sql
+%MYSQL% -u %DB_USER% -p%DB_PASS% < sql\05_sample_data.sql
 if errorlevel 1 ( echo FAILED & pause & exit /b 1 )
 echo       OK
 

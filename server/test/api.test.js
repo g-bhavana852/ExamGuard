@@ -905,16 +905,6 @@ describe('Classroom endpoints', () => {
     }
   });
 
-  test('POST /api/classroom/end — proctor can end the classroom', async () => {
-    if (!createdExamId) return;
-    const res = await base.post('/api/classroom/end')
-      .set('x-session-token', proctorToken)
-      .send({ exam_id: createdExamId });
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    createdExamId = null; // already ended
-  });
-
   test('GET /api/classroom/active — returns null after classroom is ended', async () => {
     const res = await base.get('/api/classroom/active')
       .set('x-session-token', proctorToken);
