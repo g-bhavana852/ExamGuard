@@ -1262,7 +1262,7 @@ describe('DB constraints and API shape validation', () => {
   });
 
   test('GET /api/dashboard returns correct stat count (4 cards)', async () => {
-    const res = await base.get('/api/dashboard');
+    const res = await base.get('/api/dashboard').set('x-session-token', adminToken);
     expect(res.status).toBe(200);
     expect(res.body.stats.length).toBe(4);
   });

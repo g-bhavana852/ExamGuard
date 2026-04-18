@@ -103,10 +103,10 @@ describe('POST /api/login', () => {
     expect(res.body.role).toBe('student');
   });
 
-  test('returns 400 for wrong password (server uses 400 to avoid leaking user existence)', async () => {
+  test('returns 401 for wrong password', async () => {
     const res = await base.post('/api/login')
       .send({ identifier: 'arjunk', password: 'wrongpassword' });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(401);
     expect(res.body).toHaveProperty('error');
   });
 
@@ -1139,8 +1139,8 @@ describe('Exam open / close / edit lifecycle', () => {
     const now = Date.now();
     const wend = new Date(row.window_end).getTime();
     expect(wend).toBeLessThanOrEqual(now + 5000);
-    // is_published must still be TRUE (ended exams stay published, not reverted to draft)
-    expect(row.is_published).toBe(1);
+    // close sets is_published=0 so the exam returns to Draft state
+    expect(row.is_published).toBe(0);
     // window_end must be >= window_start (constraint not violated)
     expect(wend).toBeGreaterThanOrEqual(new Date(row.window_start).getTime());
   });

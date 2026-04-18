@@ -951,8 +951,8 @@ describe('POST /api/flags/:id/resolve', () => {
       );
       if (attempt) {
         const [result] = await pool.execute(
-          `INSERT INTO SuspicionFlags (attempt_id, flag_type, details, severity)
-           VALUES (?, 'OTHER', 'test flag for API', 'MEDIUM')`,
+          `INSERT INTO SuspicionFlags (attempt_id, flag_type, description)
+           VALUES (?, 'EXCESSIVE_TAB_SWITCHES', 'test flag for API')`,
           [attempt.attempt_id]
         );
         flagId = result.insertId;
@@ -980,8 +980,8 @@ describe('POST /api/flags/:id/resolve', () => {
     const [[attempt]] = await pool.execute(`SELECT attempt_id FROM ExamAttempts LIMIT 1`);
     if (!attempt) return;
     const [result] = await pool.execute(
-      `INSERT INTO SuspicionFlags (attempt_id, flag_type, details, severity)
-       VALUES (?, 'OTHER', 'fresh flag', 'LOW')`,
+      `INSERT INTO SuspicionFlags (attempt_id, flag_type, description)
+       VALUES (?, 'EXCESSIVE_TAB_SWITCHES', 'fresh flag')`,
       [attempt.attempt_id]
     );
     const newFlagId = result.insertId;

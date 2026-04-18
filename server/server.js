@@ -1121,7 +1121,7 @@ route('get', '/api/exams', async (req, res) => {
       const upcoming   = published && now < start;
       const active     = published && now >= start && now <= end;
       const ended      = published && !upcoming && !active;
-      const statusText  = draft ? 'Draft' : active ? 'Live' : ended ? 'Ended' : 'Upcoming';
+      const statusText  = draft ? 'Draft' : active ? 'Active' : ended ? 'Ended' : 'Upcoming';
       const statusBadge = draft ? 'badge-gray' : active ? 'badge-green' : ended ? 'badge-red' : 'badge-purple';
       const passRate = r.completed > 0
         ? Math.round((r.passed / r.completed) * 100) + '%'
@@ -1167,6 +1167,7 @@ route('get', '/api/exams', async (req, res) => {
 // ── GET /api/questions ────────────────────────────────────────
 route('get', '/api/questions', async (req, res) => {
     const { userId, role } = await getUserWithRole(req);
+    const examIdFilter = req.query.exam_id ? parseInt(req.query.exam_id) : null;
     const ownerSql    = (role === 'teacher') ? 'AND e.created_by = ?' : '';
     const ownerParams = (role === 'teacher') ? [userId] : [];
 
@@ -1194,7 +1195,7 @@ route('get', '/api/questions', async (req, res) => {
       JOIN Exams   e ON q.exam_id    = e.exam_id
       JOIN Courses c ON e.course_id  = c.course_id
       LEFT JOIN StudentAnswers sa ON q.question_id = sa.question_id
-      WHERE 1=1 ${ownerSql}
+      WHERE 1=1 ${ownerSql} ${examIdFilter ? 'AND q.exam_id = ?' : ''}
       GROUP BY q.question_id, q.exam_id, e.title, c.course_code,
                q.order_index, q.question_text, q.question_type,
                q.marks, q.difficulty_level,
@@ -1202,7 +1203,7 @@ route('get', '/api/questions', async (req, res) => {
                q.option_e, q.option_f, q.option_g, q.option_h, q.option_i, q.option_j,
                q.correct_answer
       ORDER BY q.exam_id ASC, q.order_index ASC`,
-      ownerParams
+      examIdFilter ? [...ownerParams, examIdFilter] : ownerParams
     );
 
     const diffBadge = d => d === 'easy' ? 'badge-green' : d === 'medium' ? 'badge-yellow' : 'badge-red';
@@ -1243,7 +1244,11 @@ route('get', '/api/questions', async (req, res) => {
       grouped[grouped.length - 1].questions.push(q);
     }
 
-    res.json({ groups: grouped });
+    if (examIdFilter) {
+      res.json({ questions });
+    } else {
+      res.json({ groups: grouped });
+    }
 });
 
 // ── PUT /api/questions/:id ────────────────────────────────────
@@ -1557,8 +1562,20 @@ route('patch', '/api/exams/:id/open', async (req, res) => {
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
   if (!hasAnyRole(roles, 'teacher', 'admin'))
     return res.status(403).json({ error: 'Only teachers and admins can open exams' });
-  const examId      = parseInt(req.params.id);
+  const examId       = parseInt(req.params.id);
   const durationMins = parseInt(req.body.duration_minutes) || 120;
+  const scheduledAt  = req.body.scheduled_at || null;
+  let scheduledMysql = null;
+
+  if (scheduledAt !== null) {
+    const schedDate = new Date(scheduledAt);
+    if (isNaN(schedDate.getTime()))
+      return res.status(400).json({ error: 'Invalid scheduled_at date string' });
+    const minFuture = new Date(Date.now() + 10 * 60 * 1000);
+    if (schedDate < minFuture)
+      return res.status(400).json({ error: 'scheduled_at must be at least 10 minutes in the future' });
+    scheduledMysql = Math.floor(schedDate.getTime() / 1000);
+  }
 
   // Ownership check
   if (role === 'teacher') {
@@ -1603,16 +1620,27 @@ route('patch', '/api/exams/:id/open', async (req, res) => {
     await pool.execute(`UPDATE Exams SET join_code=? WHERE exam_id=?`, [join_code, examId]);
   }
 
-  await pool.execute(
-    `UPDATE Exams
-     SET is_published = TRUE,
-         window_start = NOW(),
-         window_end   = DATE_ADD(NOW(), INTERVAL ? MINUTE)
-     WHERE exam_id = ?`,
-    [durationMins, examId]
-  );
-
-  res.json({ success: true, join_code });
+  if (scheduledMysql) {
+    await pool.execute(
+      `UPDATE Exams
+       SET is_published = TRUE,
+           window_start = FROM_UNIXTIME(?),
+           window_end   = FROM_UNIXTIME(? + ? * 60)
+       WHERE exam_id = ?`,
+      [scheduledMysql, scheduledMysql, durationMins, examId]
+    );
+    res.json({ success: true, scheduled: true, join_code });
+  } else {
+    await pool.execute(
+      `UPDATE Exams
+       SET is_published = TRUE,
+           window_start = NOW(),
+           window_end   = DATE_ADD(NOW(), INTERVAL ? MINUTE)
+       WHERE exam_id = ?`,
+      [durationMins, examId]
+    );
+    res.json({ success: true, scheduled: false, join_code });
+  }
 });
 
 // ── PATCH /api/exams/:id/close ────────────────────────────────
@@ -1631,7 +1659,7 @@ route('patch', '/api/exams/:id/close', async (req, res) => {
   }
 
   await pool.execute(
-    `UPDATE Exams SET window_end = GREATEST(NOW(), DATE_ADD(window_start, INTERVAL 1 SECOND)) WHERE exam_id = ?`,
+    `UPDATE Exams SET is_published = FALSE, window_end = GREATEST(NOW(), DATE_ADD(window_start, INTERVAL 1 SECOND)) WHERE exam_id = ?`,
     [examId]
   );
   res.json({ success: true });
@@ -1704,14 +1732,7 @@ route('post', '/api/questions', async (req, res) => {
       correct_answer || null, difficulty_level || 'medium', order_index || 0,
     ]
   );
-  // If live, sync total_marks to actual sum of question marks
-  if (isLive) {
-    await pool.execute(
-      `UPDATE Exams SET total_marks = (SELECT COALESCE(SUM(marks),0) FROM Questions WHERE exam_id = ?) WHERE exam_id = ?`,
-      [exam_id, exam_id]
-    );
-  }
-  res.json({ success: true, question_id: result.insertId, liveUpdate: isLive });
+  res.json({ success: true, question_id: result.insertId });
 });
 
 // ── DELETE /api/questions/:id ─────────────────────────────────
@@ -1818,7 +1839,7 @@ route('post', '/api/login', async (req, res) => {
     [identifier, identifier]
   );
   if (!rows.length || !checkPw(password, rows[0].password_hash))
-    return res.status(400).json({ error: 'Invalid username or password' });
+    return res.status(401).json({ error: 'Invalid username or password' });
 
   const user  = rows[0];
 
